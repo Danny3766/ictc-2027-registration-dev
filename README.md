@@ -10,3 +10,5 @@
 3. 啟動：`npm start`，開啟 http://localhost:8765 。VSCode 也可以從側邊欄「NPM Scripts」點選 `start`。
 
 E2E 測試：`npm run test:e2e`。測試會自己占用 8765，執行前先停掉 `npm start`。
+
+## 測試環境使用
