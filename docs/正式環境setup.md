@@ -353,3 +353,16 @@ feat/*（功能開發） → PR → develop（整合，不部署） → PR → m
 6. 重新開放登記，通知服事者維護結束。
 
 只改前端的更新不需要關閉登記，合併進 `main` 後依 7-4 核對即可。
+
+只調整限流數值的 migration 也不需要關閉登記：它只改資料庫，整支在單一交易內完成。流程見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-07 上線尖峰限流」一節。驗證腳本只能在測試專案執行，正式專案套用後改用下面的唯讀查詢，四欄都應為 `true`。同一來源上限調回平時值時，把 `> 200 then` 改成 `> 60 then`。
+
+```sql
+-- 限流數值檢查（唯讀）
+select
+  pg_get_functiondef('public.create_registration(uuid, text, integer, jsonb, jsonb, text)'::regprocedure)
+    like '%created_count < 150);%' as create_limit,
+  (select pg_get_constraintdef(oid) from pg_constraint where conname = 'registration_create_limits_created_count_check')
+    like '%<= 150)))' as create_check,
+  pg_get_functiondef('public.consume_public_request(text)'::regprocedure) like '%v_source > 200 then%' as source_limit,
+  pg_get_functiondef('public.consume_public_request(text)'::regprocedure) like '%v_global <= 1000;%' as global_limit;
+```

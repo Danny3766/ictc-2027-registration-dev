@@ -115,6 +115,20 @@ tbody tr:hover { background: #f9fbfa; }
 td button { min-height: 2rem; margin: 0 .4rem 0 0; padding: .25rem .8rem; color: #23624b; background: #fff; font-size: .9rem; }
 td button:hover { background: #e8f1ec; }
 table.numeric td:not(:first-child), table.numeric th:not(:first-child) { text-align: right; }
+/* pre-line keeps the description's line breaks and lets long text wrap inside the nowrap table.
+   width: 0 keeps the list from widening the title column (which would push 編輯 and 調整排序 off screen);
+   it fills the width the column already has, but at least 12rem so a short title still leaves room. */
+.activity-details summary { cursor: pointer; }
+.activity-details dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem .75rem; width: 0;
+  min-width: max(100%, 12rem); margin: .5rem 0 .25rem; color: #59655f; font-size: .9rem; white-space: pre-line; }
+.activity-details dt { font-weight: 600; }
+.activity-details dd { margin: 0; overflow-wrap: anywhere; }
+/* An open row is tall; keep 類型, 時間 and 編輯 on the title's line instead of its middle. */
+#activity-rows td { vertical-align: baseline; }
+/* Open details would make rows tall to drag, so reordering hides them, and the ▼/▶ marker with them. */
+.reordering .activity-details dl { display: none; }
+.reordering .activity-details summary { list-style: none; cursor: default; }
+.reordering .activity-details summary::-webkit-details-marker { display: none; }
 
 /* Activity reorder: the last column's header holds 調整排序 (and 取消 while reordering); its ☰ handles
    show only while reordering. touch-action keeps a finger drag from scrolling the page on phones. */

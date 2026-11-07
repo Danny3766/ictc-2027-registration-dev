@@ -9,6 +9,10 @@ declare
     then '{"status":"not_hosting"}'::jsonb end;
   v_district_id integer;
   v_registration_id uuid;
+  -- Per-source limit: 200 at a peak, 60 normally. Change only this when the limit is switched.
+  v_source_limit constant integer := 200;
+  -- A suffix keeps the names from clashing with a registration someone made by hand on the test site.
+  v_suffix text := left(gen_random_uuid()::text, 8);
 begin
   if not coalesce((select is_test_environment from public.site_settings where id = true), false) then
     raise exception 'TEST_PROJECT_NOT_CONFIRMED';
@@ -46,13 +50,28 @@ begin
   end;
 
   update public.registration_create_limits
-  set window_started_at = now(), created_count = 50 where id = true;
+  set window_started_at = now(), created_count = 149 where id = true;
+  perform public.create_registration(gen_random_uuid(), '限流驗收測試甲' || v_suffix, v_district_id, v_choices, v_hosting);
   begin
-    perform public.create_registration(gen_random_uuid(), '限流驗收測試', v_district_id, v_choices, v_hosting);
+    perform public.create_registration(gen_random_uuid(), '限流驗收測試乙' || v_suffix, v_district_id, v_choices, v_hosting);
     raise exception 'RATE_LIMIT_DID_NOT_BLOCK';
   exception when others then
     if sqlerrm <> 'CREATE_RATE_LIMITED' then raise; end if;
   end;
+
+  -- One source gets v_source_limit requests per 10 minutes, the whole site 1000.
+  delete from public.public_request_limits;
+  for i in 1..v_source_limit loop
+    if not public.consume_public_request(repeat('a', 64)) then raise exception 'SOURCE_LIMIT_TOO_LOW'; end if;
+  end loop;
+  if public.consume_public_request(repeat('a', 64)) then raise exception 'SOURCE_LIMIT_DID_NOT_BLOCK'; end if;
+  -- The refused request does not count globally, so one busy source cannot use up everyone's allowance.
+  if (select request_count from public.public_request_limits where source_key = 'global') is distinct from v_source_limit then
+    raise exception 'REFUSED_REQUEST_COUNTED_GLOBALLY';
+  end if;
+  update public.public_request_limits set request_count = 999 where source_key = 'global';
+  if not public.consume_public_request(repeat('b', 64)) then raise exception 'GLOBAL_LIMIT_TOO_LOW'; end if;
+  if public.consume_public_request(repeat('c', 64)) then raise exception 'GLOBAL_LIMIT_DID_NOT_BLOCK'; end if;
 
   raise notice 'ALL_NO_AND_RATE_LIMIT_OK';
 end;

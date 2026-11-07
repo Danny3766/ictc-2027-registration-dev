@@ -1,5 +1,6 @@
-// 用餐身分（學生價）與報名對象, shared by the public page and the back office. The database applies the
-// same rules (registration_meal_identity, registration_audience_valid); this only keeps the form in step.
+// 用餐身分（學生價）、報名對象，以及活動的時間、費用與地圖連結文字, shared by the public page and the
+// back office. The database applies the same rules (registration_meal_identity,
+// registration_audience_valid); this only keeps the form in step.
 const Meals = (() => {
   const identityLabels = { general: "一般", student: "學生" };
   const revertedNote = "不符報名對象，已改為不參加。";
@@ -24,12 +25,26 @@ const Meals = (() => {
   const needsIdentity = (activities, choices) => choices.some((choice) => choice.attending
     && activities.some((activity) => activity.id === choice.activity_id && hasStudentPrice(activity)));
 
-  function feeText(activity) {
+  function priceText(activity) {
     const prices = [];
     if (activity.fee_amount != null) prices.push(`${hasStudentPrice(activity) ? "一般 " : ""}NT$${activity.fee_amount}／人`);
     if (hasStudentPrice(activity)) prices.push(`學生 NT$${activity.student_fee_amount}／人`);
-    return prices.length ? `負擔費用：${prices.join("，")}` : "";
+    return prices.join("，");
   }
+  function feeText(activity) {
+    const prices = priceText(activity);
+    return prices && `負擔費用：${prices}`;
+  }
+
+  // The public page links only http(s) map URLs; the back office warns about any other value.
+  const mapUrl = (value) => {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" || url.protocol === "http:" ? url.href : "";
+    } catch {
+      return "";
+    }
+  };
 
   const radio = (container, activity, value) =>
     container.querySelector(`[name="activity_${activity.id}"][value="${value}"]`);
@@ -140,11 +155,43 @@ const Meals = (() => {
   const identityFor = (activities, choices, identity) =>
     identity && needsIdentity(activities, choices) ? identity : null;
 
+  const taipeiDateTime = (value) => {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Taipei", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(date).map((part) => [part.type, part.value]));
+    return {
+      day: `${parts.year}-${parts.month}-${parts.day}`,
+      date: `${Number(parts.month)}/${Number(parts.day)}`,
+      time: `${parts.hour}:${parts.minute}`,
+    };
+  };
+
+  // The 時間 line as the public page shows it; the back office's activity details show the same text.
+  function activityTime(activity) {
+    const start = taipeiDateTime(activity.starts_at);
+    if (!start) return "";
+    const startText = activity.starts_at_has_time === false ? start.date : `${start.date} ${start.time}`;
+    const end = taipeiDateTime(activity.ends_at);
+    if (!end) return startText;
+    if (end.day === start.day && activity.starts_at_has_time === false && activity.ends_at_has_time === false) {
+      return startText;
+    }
+    const bothTimesOnSameDay = end.day === start.day
+      && activity.starts_at_has_time !== false && activity.ends_at_has_time !== false;
+    const endText = bothTimesOnSameDay ? end.time
+      : (activity.ends_at_has_time === false ? end.date : `${end.date} ${end.time}`);
+    return `${startText}–${endText}`;
+  }
+
   // How many restricted activities sync() turned from 參加 into 不參加 in this container.
   const revertedCount = (container) => container.querySelectorAll("input[data-reverted]").length;
 
   return {
-    identityLabels, hasStudentPrice, eligible, fee, needsIdentity, identityFor, feeText,
+    identityLabels, hasStudentPrice, eligible, fee, needsIdentity, identityFor, priceText, feeText, mapUrl, activityTime,
     render, sync, choices, readIdentity, revertedCount,
   };
 })();

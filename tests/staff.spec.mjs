@@ -116,8 +116,11 @@ test("activity dates allow an optional Taiwan time", async ({ page }) => {
     } }),
   });
   await login(page);
-  await expect(page.locator("#activity-rows tr").first()).toContainText("2/20");
-  await expect(page.locator("#activity-rows tr").first()).not.toContainText("00:00");
+  // Only the 開始 column: the row also holds the collapsed details' 時間 line.
+  const startCell = page.locator("#activity-rows tr").first().locator("td").nth(2);
+  await expect(startCell).toHaveText("2/20");
+  await page.locator("#activity-rows").getByText("日期活動").click();
+  await expect(page.locator("#activity-rows dl")).toHaveText("時間2/20");
   await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).click();
   const form = page.locator("#activity-form");
   await expect(form.locator('input[name="starts_on"]')).toHaveValue("2027-02-20");
@@ -129,6 +132,91 @@ test("activity dates allow an optional Taiwan time", async ({ page }) => {
   expect(saved.starts_at_has_time).toBe(true);
   expect(saved.ends_at).toBeNull();
   expect(saved.ends_at_has_time).toBe(false);
+});
+
+test("clicking an activity title shows its content without editing", async ({ page }) => {
+  await mockStaff(page, "admin", () => {}, "測試登記", {
+    list_reference: () => ({ json: {
+      settings: { event_name: "測試", is_registration_open: false },
+      districts: [{ id: 1, name: "林森", sort_order: 1 }],
+      activities: [
+        { id: 1, title: "週六午餐", category: "meal", starts_at: "2027-02-20T10:30:00+08:00", starts_at_has_time: true,
+          ends_at: "2027-02-20T13:00:00+08:00", ends_at_has_time: true, venue: "京星", map_url: "https://maps.example/a",
+          fee_amount: 400, student_fee_amount: 200, cost_amount: 450, audience: "hosting",
+          description: "第一行\n第二行", is_published: false, sort_order: 1 },
+        { id: 2, title: "空白活動", category: "other", audience: "activity:1", is_published: true, sort_order: 2 },
+        { id: 3, title: "舊限定活動", category: "other", audience: "activity:99", map_url: "goo.gl/x",
+          is_published: true, sort_order: 3 },
+      ],
+      program: [],
+    } }),
+  });
+  await login(page);
+  const first = page.locator("#activity-rows tr").first();
+  await expect(first.locator("dl")).toBeHidden();
+  await first.getByText("週六午餐").click();
+  const details = first.locator("dl");
+  await expect(details).toBeVisible();
+  // Same text as the public page's 時間 line: a same-day end shows only its time.
+  await expect(details).toContainText("2/20 10:30–13:00");
+  await expect(details).toContainText("京星");
+  await expect(details.getByRole("link", { name: "https://maps.example/a" })).toHaveAttribute("href", "https://maps.example/a");
+  await expect(details).toContainText("一般 NT$400／人，學生 NT$200／人");
+  await expect(details).toContainText("NT$450／人");
+  await expect(details).toContainText("有開家接待的聖徒");
+  expect(await details.locator("dd").last().innerText()).toBe("第一行\n第二行");
+  await expect(page.locator("#activity-form input[name=\"title\"]")).toHaveValue("");
+
+  const second = page.locator("#activity-rows tr").nth(1);
+  await second.getByText("空白活動").click();
+  await expect(second.locator("dl")).toContainText("參加「週六午餐（未公開）」的人");
+  const third = page.locator("#activity-rows tr").nth(2);
+  await third.getByText("舊限定活動").click();
+  await expect(third.locator("dl")).toContainText("參加已刪除活動的人");
+  await expect(third.locator("dl")).toContainText("goo.gl/x（格式不正確，公開頁不會顯示）");
+
+  await second.getByText("空白活動").click();
+  await expect(second.locator("dl")).toBeHidden();
+
+  // Open details would make the rows tall while dragging, so reordering hides them, and a title
+  // click there changes nothing.
+  await page.getByRole("button", { name: "調整排序" }).click();
+  await expect(details).toBeHidden();
+  await expect(second.locator("details")).toHaveJSProperty("inert", true);
+  await second.getByText("空白活動").click({ force: true });
+  // The redraw after 取消 keeps what was expanded, and only that.
+  await page.locator("#cancel-reorder").click();
+  await expect(page.locator("#activity-rows tr").first().locator("dl")).toBeVisible();
+  await expect(page.locator("#activity-rows tr").nth(1).locator("dl")).toBeHidden();
+});
+
+test("an open activity keeps the table width and its buttons on screen", async ({ page }) => {
+  const long = "很長的說明文字".repeat(40);
+  await mockStaff(page, "admin", () => {}, "測試登記", {
+    list_reference: () => ({ json: {
+      settings: { event_name: "測試", is_registration_open: false },
+      districts: [{ id: 1, name: "林森", sort_order: 1 }],
+      activities: [
+        { id: 1, title: "午餐", category: "meal", address: long, description: long, is_published: true, sort_order: 1 },
+        { id: 2, title: "華語特會（第二天，含擘餅）", category: "meeting", is_published: true, sort_order: 2 },
+      ],
+      program: [],
+    } }),
+  });
+  await login(page);
+  const scroll = page.locator("#admin-activities .table-scroll");
+  const width = () => scroll.evaluate((element) => element.scrollWidth);
+  const title = page.locator("#activity-rows").getByText("午餐", { exact: true });
+  await expect(title).toBeVisible();
+  const before = await width();
+  await title.click();
+  await expect(page.locator("#activity-rows dl").first()).toBeVisible();
+  // The long text wraps inside the title column instead of widening the table.
+  expect(await width()).toBeLessThanOrEqual(before + 1);
+  const dl = await page.locator("#activity-rows dl").first().boundingBox();
+  expect(dl.width).toBeGreaterThanOrEqual(12 * 16 - 1);
+  const reorder = await page.getByRole("button", { name: "調整排序" }).boundingBox();
+  expect(reorder.x + reorder.width).toBeLessThanOrEqual(page.viewportSize().width);
 });
 
 test("cancelling an edit makes the next save create a new row", async ({ page }) => {
@@ -413,7 +501,7 @@ const threeActivities = {
     program: [],
   } }),
 };
-const activityTitles = (page) => page.locator("#activity-rows tr td:first-child").allTextContents();
+const activityTitles = (page) => page.locator("#activity-rows tr td:first-child summary").allTextContents();
 
 test("activities can be reordered by dragging or arrow keys and saved together", async ({ page }) => {
   let saved;

@@ -320,6 +320,11 @@ Q43 已確認。
 
 ## 本次新增必要範圍：正式站上線準備
 
+- [x] 本機完成：`202611070001_raise_launch_rate_limits.sql` 為 11/8 上線尖峰放寬 10 分鐘限流：全站新登記 50→150、同一來源 60→200、全站公開請求 600→1000；`verify-all-no-and-rate-limit.sql` 改驗新數值。依據見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-07 上線尖峰限流」一節。
+- [ ] 測試專案套用 `202611070001_raise_launch_rate_limits.sql`，在 SQL Editor 執行 `supabase/testing/verify-all-no-and-rate-limit.sql`，確認 `ALL_NO_AND_RATE_LIMIT_OK`。
+- [ ] 正式專案套用 `202611070001_raise_launch_rate_limits.sql`（不需關閉登記），以[正式環境設定流程](正式環境setup.md)第 9-3 節的唯讀查詢確認四欄皆為 `true`，記錄在[正式環境設定流程](正式環境setup.md)第 3 節。
+- [ ] 尖峰過後由專案負責人判斷，新增 migration 把同一來源上限調回 60，並更新驗證腳本。
+
 - [x] 本機完成：`202611060003_revoke_default_api_grants.sql` 撤銷 Supabase 預設給 `anon`、`authenticated` 的資料表、序列與函式權限，只保留原本刻意開放的公開讀取，並停止新物件自動授權。在模擬 Supabase 預設權限的本機資料庫驗證：私有資料表匿名不可讀、函式匿名不可執行；四支 `supabase/testing` 驗證以 `service_role` 執行通過。
 - [x] 本機完成：`supabase/production/baseline_202611060003.sql` 依序串接 16 支 migration 成單一交易，與逐支執行比對結構、權限與初始資料完全一致。
 - [x] `pages.yml` 只由 `main` 觸發；分支與發布規則寫入 [正式環境設定流程](正式環境setup.md) 第 7、9 節。

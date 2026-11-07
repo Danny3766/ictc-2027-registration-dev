@@ -222,6 +222,57 @@ function activitySortOrder(form, value) {
   return Math.max(0, ...existing) + 1;
 }
 
+// An activity as an audience; an unpublished one is flagged because nobody can sign up for it.
+const prerequisiteLabel = (activity) => `${activity.title}${activity.is_published ? "" : "（未公開）"}`;
+
+function audienceText(item) {
+  if (!item.audience || item.audience === "all") return "";
+  if (item.audience.startsWith("activity:")) {
+    const target = reference.activities.find((activity) => `activity:${activity.id}` === item.audience);
+    return target ? `參加「${prerequisiteLabel(target)}」的人` : "參加已刪除活動的人";
+  }
+  const options = document.querySelector('#activity-form [name="audience"]').options;
+  return Array.from(options).find((option) => option.value === item.audience)?.textContent ?? item.audience;
+}
+
+function mapLinkValue(value) {
+  const url = Meals.mapUrl(value);
+  if (!url) return `${value}（格式不正確，公開頁不會顯示）`;
+  const link = document.createElement("a");
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = value;
+  return link;
+}
+
+// The title expands to the rest of what the edit form holds, so reading an activity needs no 編輯.
+function activityDetails(item, open) {
+  const lines = [
+    ["時間", Meals.activityTime(item)],
+    ["地點", item.venue], ["地址", item.address], ["地圖連結", item.map_url && mapLinkValue(item.map_url)],
+    ["費用", Meals.priceText(item)],
+    ["實際成本", item.cost_amount == null ? "" : `NT$${item.cost_amount}／人`],
+    ["報名對象", audienceText(item)], ["限定對象提示", item.audience_note], ["說明", item.description],
+  ].filter(([, value]) => value);
+  const details = document.createElement("details");
+  details.className = "activity-details";
+  details.open = open;
+  details.inert = activitySection.classList.contains("reordering");
+  const summary = document.createElement("summary");
+  summary.textContent = item.title;
+  const list = document.createElement("dl");
+  for (const [name, value] of lines.length ? lines : [["內容", "尚未填寫其他資料"]]) {
+    const term = document.createElement("dt");
+    term.textContent = name;
+    const description = document.createElement("dd");
+    description.append(value);
+    list.append(term, description);
+  }
+  details.append(summary, list);
+  return details;
+}
+
 function editButton(row, callback) {
   const action = cell(row, "");
   const button = document.createElement("button");
@@ -262,7 +313,7 @@ function setAudienceOptions(editingId = null) {
     if (String(activity.id) === String(editingId)) continue;
     const option = document.createElement("option");
     option.value = `activity:${activity.id}`;
-    option.textContent = `${activity.title}${activity.is_published ? "" : "（未公開）"}`;
+    option.textContent = prerequisiteLabel(activity);
     select.append(option);
   }
   select.value = selected;
@@ -283,10 +334,16 @@ function renderReferenceRows(only) {
   ]) {
     if (only ? table !== only : table === "#activity-rows" && activitySection.classList.contains("reordering")) continue;
     const rows = document.querySelector(table);
+    // A redraw after a save or reorder keeps the activities the user had expanded.
+    const opened = new Set(Array.from(rows.querySelectorAll("details[open]"), (details) => details.closest("tr").dataset.id));
     rows.replaceChildren();
     for (const item of items) {
       const row = document.createElement("tr");
       for (const column of columns) {
+        if (table === "#activity-rows" && column === "title") {
+          cell(row, "").append(activityDetails(item, opened.has(String(item.id))));
+          continue;
+        }
         const value = table === "#activity-rows" && column === "starts_at"
           ? activityTimeDisplay(item.starts_at, item.starts_at_has_time)
           : displayValue(column, item[column]);
@@ -863,6 +920,9 @@ function setReordering(on) {
   cancelReorderButton.hidden = !on;
   document.querySelector("#reorder-hint").hidden = !on;
   for (const button of activityRows.querySelectorAll("button:not(.drag-handle)")) button.disabled = on;
+  // The details list is hidden while reordering; inert keeps its title from being a tab stop announced as
+  // expanded, or toggled into a state nobody sees that reopens after 完成排序.
+  for (const details of activityRows.querySelectorAll("details")) details.inert = on;
 }
 
 reorderButton.addEventListener("click", async () => {
