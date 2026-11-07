@@ -125,6 +125,23 @@ test("closed registration remains queryable by name and district and disables ed
   }
 });
 
+test("a passed deadline closes the form even while registration is switched on", async ({ page }) => {
+  const settings = (deadline) => ({ ...openPage(), settings: { ...openPage().settings, registration_deadline_at: deadline } });
+  const past = new Date(Date.now() - 60_000).toISOString();
+  const future = new Date(Date.now() + 3_600_000).toISOString();
+  let deadline = past;
+  await page.route("**/functions/v1/registration", (route) => route.fulfill({ json: settings(deadline) }));
+
+  await page.goto("/");
+  await expect(page.locator('#registration-form button[type="submit"]')).toBeDisabled();
+  await expect(page.locator("#page-message")).toHaveText("登記已截止。");
+
+  deadline = future;
+  await page.reload();
+  await expect(page.locator('#registration-form button[type="submit"]')).toBeEnabled();
+  await expect(page.locator("#page-message")).not.toHaveText("登記已截止。");
+});
+
 test("a query that finds nothing shows the server message", async ({ page }) => {
   await page.route("**/functions/v1/registration", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: openPage() });

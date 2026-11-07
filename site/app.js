@@ -405,9 +405,12 @@ async function loadPage() {
     Meals.render(document.querySelector("#activities"), pageData.activities);
     showRegistrationHosting();
     syncMeals();
-    if (!pageData.settings.is_registration_open || pageData.activities.length === 0) {
+    // The server enforces the deadline; this only keeps the page from looking open after it.
+    const deadline = pageData.settings.registration_deadline_at;
+    const pastDeadline = Boolean(deadline) && new Date(deadline) <= new Date();
+    if (!pageData.settings.is_registration_open || pastDeadline || pageData.activities.length === 0) {
       registrationForm.querySelector("button[type=submit]").disabled = true;
-      showMessage("登記目前尚未開放。", true);
+      showMessage(pastDeadline ? "登記已截止。" : "登記目前尚未開放。", true);
     }
   } catch (error) {
     registrationForm.hidden = true;
