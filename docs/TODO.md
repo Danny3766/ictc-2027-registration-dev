@@ -1,6 +1,6 @@
 ﻿# ICTC 2027 登記系統 TODO
 
-> 更新日期：2026-11-05
+> 更新日期：2026-11-07
 > 目標：完成測試與正式環境驗收後才公開；核心流程或資料安全未通過則延後。
 
 > 2026-11-04 範圍修訂：測試站須包含完整服事者／管理員登入與後台，並驗收公開與後台流程。取消／恢復從公開 API、後台操作及驗收移除；既有資料欄位暫留。Turnstile 改為主要功能上線後擴充，不作為本次公開關卡。未通過必要驗收則延後。驗收結果記在 [驗收紀錄](驗收紀錄.md)。
@@ -321,8 +321,9 @@ Q43 已確認。
 ## 本次新增必要範圍：正式站上線準備
 
 - [x] 本機完成：`202611070001_raise_launch_rate_limits.sql` 為 11/8 上線尖峰放寬 10 分鐘限流：全站新登記 50→150、同一來源 60→200、全站公開請求 600→1000；`verify-all-no-and-rate-limit.sql` 改驗新數值。依據見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-07 上線尖峰限流」一節。
-- [ ] 測試專案套用 `202611070001_raise_launch_rate_limits.sql`，在 SQL Editor 執行 `supabase/testing/verify-all-no-and-rate-limit.sql`，確認 `ALL_NO_AND_RATE_LIMIT_OK`。
-- [ ] 正式專案套用 `202611070001_raise_launch_rate_limits.sql`（不需關閉登記），以[正式環境設定流程](正式環境setup.md)第 9-3 節的唯讀查詢確認四欄皆為 `true`，記錄在[正式環境設定流程](正式環境setup.md)第 3 節。
+- [x] 測試專案套用 `202611070001_raise_launch_rate_limits.sql`：`supabase/testing/verify-all-no-and-rate-limit.sql` 顯示 `Success. No rows returned`、沒有 `ERROR`，[正式環境設定流程](正式環境setup.md)第 9-3 節唯讀查詢四欄皆為 `true`。結果記在[驗收紀錄](驗收紀錄.md)。（2026-11-07）
+- [x] 正式專案套用 `202611070001_raise_launch_rate_limits.sql`，以[正式環境設定流程](正式環境setup.md)第 9-3 節的唯讀查詢確認四欄皆為 `true`，記錄在[正式環境設定流程](正式環境setup.md)第 3 節。依決策不需關閉登記；套用當下的登記開關狀態未記錄。（2026-11-07）
+- [x] 2026-11-07 合併 `develop` → `main`（專案負責人決定當天合併）：先把本套用紀錄的文件 PR 合併進 `develop`，再開 `develop` → `main` 的 PR，以 **Create a merge commit** 合併。內容包含已套用到正式專案的 `202611070001`，以及 PR #30 的後台活動內容展開（前端，會部署到正式站）。部署後依[正式環境設定流程](正式環境setup.md)第 7-4 節核對，並在正式站後台確認點活動名稱可展開活動內容、編輯與排序正常，結果記在[驗收紀錄](驗收紀錄.md)。（2026-11-07 PR #33 完成，核對結果記在[驗收紀錄](驗收紀錄.md)。）
 - [ ] 尖峰過後由專案負責人判斷，新增 migration 把同一來源上限調回 60，並更新驗證腳本。
 
 - [x] 本機完成：`202611060003_revoke_default_api_grants.sql` 撤銷 Supabase 預設給 `anon`、`authenticated` 的資料表、序列與函式權限，只保留原本刻意開放的公開讀取，並停止新物件自動授權。在模擬 Supabase 預設權限的本機資料庫驗證：私有資料表匿名不可讀、函式匿名不可執行；四支 `supabase/testing` 驗證以 `service_role` 執行通過。
