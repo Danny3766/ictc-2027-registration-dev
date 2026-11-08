@@ -56,7 +56,7 @@ test("CSV neutralizes spreadsheet formulas", async ({ page }, testInfo) => {
   await page.getByRole("button", { name: "登入" }).click();
   await go(page, "統計與匯出");
   const download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "下載 CSV" }).click();
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
   const csv = await readFile(await (await download).path(), "utf8");
   expect(csv).toContain("'\u003d1+1");
   expect(csv).toContain('"待匯入"');
@@ -914,6 +914,112 @@ test("the registration list shows 10 rows a page and names the import column 匯
   expect(pages).toEqual([0, 1]);
 });
 
+test("the registration list filters by 區 together with the name, keeps both while paging, and 清除條件 clears them", async ({ page }) => {
+  const lists = [];
+  let failNext = false;
+  await mockStaff(page, "staff", () => {}, "測試登記", {
+    list_reference: () => ({ json: {
+      settings: { event_name: "測試", is_registration_open: false },
+      districts: [{ id: 1, name: "林森", sort_order: 1 }, { id: 2, name: "第二區", sort_order: 2 }],
+      activities: [], program: [],
+    } }),
+    list_registrations: (payload) => {
+      // before_serial requests are the full export for statistics, not the paged list.
+      if (payload.before_serial !== undefined) return { json: { registrations: [] } };
+      lists.push(payload);
+      if (failNext) {
+        failNext = false;
+        return { status: 503, json: { error: "名單載入失敗" } };
+      }
+      return { json: { count: 11, registrations: [] } };
+    },
+  });
+  await login(page);
+  const form = page.locator("#search-form");
+  const name = form.locator('input[name="search"]');
+  const district = form.locator('select[name="district_id"]');
+  const clear = page.getByRole("button", { name: "清除條件" });
+  await expect(district.locator("option")).toHaveText(["全部區", "林森", "第二區"]);
+  await expect(clear).toBeDisabled();
+  // A typed name is enough to clear, before 搜尋.
+  await name.fill("王");
+  await expect(clear).toBeEnabled();
+  await district.selectOption({ label: "第二區" });
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.length).toBe(2);
+  await page.locator("#next-page").click();
+  await expect(page.locator("#page-number")).toHaveText("第 2 頁");
+  expect(lists).toEqual([
+    { action: "list_registrations", page: 0, search: "" },
+    { action: "list_registrations", page: 0, search: "王", district_id: 2 },
+    { action: "list_registrations", page: 1, search: "王", district_id: 2 },
+  ]);
+
+  // A failed load keeps the conditions from before 清除條件, in the fields and on the list.
+  failNext = true;
+  await clear.click();
+  await expect(page.locator("#message")).toHaveText("名單載入失敗");
+  await page.locator("#message-close").click();
+  await expect(name).toHaveValue("王");
+  await expect(district).toHaveValue("2");
+  await expect(page.locator("#page-number")).toHaveText("第 2 頁");
+
+  // Emptied fields leave the applied filter on the list, so 清除條件 stays usable.
+  await name.fill("");
+  await district.selectOption({ label: "全部區" });
+  await expect(clear).toBeEnabled();
+  await clear.click();
+  await expect(page.locator("#page-number")).toHaveText("第 1 頁");
+  expect(lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  await expect(clear).toBeDisabled();
+
+  // 登出 clears the conditions for the next login on the same page.
+  await name.fill("王");
+  await district.selectOption({ label: "第二區" });
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.at(-1).district_id).toBe(2);
+  await page.getByRole("button", { name: "登出" }).click();
+  await page.locator('#login-form input[name="username"]').fill("tester");
+  await page.locator('#login-form input[name="password"]').fill("test-password");
+  await page.getByRole("button", { name: "登入" }).click();
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  await expect(name).toHaveValue("");
+  await expect(district).toHaveValue("");
+  await expect(clear).toBeDisabled();
+  // A chosen 區 alone is also enough to clear, before 搜尋.
+  await district.selectOption({ label: "林森" });
+  await expect(clear).toBeEnabled();
+});
+
+test("an expired login while paging a 區 search does not hand the conditions to the next login", async ({ page }) => {
+  const lists = [];
+  await mockStaff(page, "staff", () => {}, "測試登記", {
+    list_registrations: (payload) => {
+      if (payload.before_serial !== undefined) return { json: { registrations: [] } };
+      lists.push(payload);
+      // The search works; the next page meets an expired login, while the search is the applied condition.
+      if (payload.page === 1) return { status: 401, json: { error: "登入已過期，請重新登入" } };
+      return { json: { count: 11, registrations: [] } };
+    },
+  });
+  await login(page);
+  const form = page.locator("#search-form");
+  await form.locator('input[name="search"]').fill("王");
+  await form.locator('select[name="district_id"]').selectOption({ label: "林森" });
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.length).toBe(2);
+  await page.locator("#next-page").click();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  await page.locator('#login-form input[name="username"]').fill("tester");
+  await page.locator('#login-form input[name="password"]').fill("test-password");
+  await page.getByRole("button", { name: "登入" }).click();
+  await expect.poll(() => lists.length).toBe(4);
+  expect(lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  await expect(form.locator('input[name="search"]')).toHaveValue("");
+  await expect(form.locator('select[name="district_id"]')).toHaveValue("");
+  await expect(page.getByRole("button", { name: "清除條件" })).toBeDisabled();
+});
+
 test("協助登記 must answer hosting while the public survey is open", async ({ page }) => {
   let created;
   await mockStaff(page, "staff", () => {}, "測試登記", {
@@ -992,7 +1098,7 @@ test("CSV adds the hosting and meal columns", async ({ page }, testInfo) => {
   await mockStaff(page, "staff", () => {}, "測試登記", hostedRegistrations);
   await login(page, "統計與匯出");
   const download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "下載 CSV" }).click();
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
   const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
   expect(lines[0]).toMatch(/"開家接待","接待對象","可接待人數","是否可以接機","可接機人數","用餐身分","預估應付餐費"$/);
   expect(lines[1]).toMatch(/"是","弟兄","2","是","1","","0"$/);
@@ -1234,7 +1340,7 @@ test("CSV shows the meal identity only where it is needed, and the fee by identi
   await mockStaff(page, "staff", () => {}, "測試登記", mealReplies());
   await login(page, "統計與匯出");
   const download = page.waitForEvent("download");
-  await page.getByRole("button", { name: "下載 CSV" }).click();
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
   const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
   expect(lines[1]).toMatch(/^"4","甲",.*,"學生","130"$/);
   expect(lines[2]).toMatch(/^"3","乙",.*,"未回覆","220"$/);
@@ -1367,6 +1473,38 @@ test("協助登記 follows the audience and asks the identity for a student-pric
   await expect(page.locator("#message")).toHaveText("協助登記已建立。");
   expect(created.meal_identity).toBe("student");
   expect(created.choices).toEqual([{ activity_id: 1, attending: true }, { activity_id: 2, attending: false }, { activity_id: 3, attending: false }]);
+});
+
+test("各區各活動 shows three cards a row on wide screens and one a row on phones", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "測試登記", {
+    list_reference: () => ({ json: {
+      settings: { event_name: "測試", is_registration_open: false },
+      districts: ["林森", "忠孝", "杭州", "其他"].map((name, index) => ({ id: index + 1, name, sort_order: index + 1 })),
+      activities: [{ id: 1, title: "測試聚會", is_published: true, fee_amount: 0 }], program: [],
+    } }),
+  });
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await login(page);
+  // Clicking the nav link brings 統計與匯出 into view, also where it is shown one section at a time.
+  await page.locator('.staff-nav a[href="#section-stats"]').click();
+  await page.getByRole("button", { name: "更新統計" }).click();
+  const cards = page.locator("#district-activity-cards > .mini-card");
+  await expect(cards).toHaveCount(5);
+  const boxes = () => cards.evaluateAll((items) => items.map((item) => {
+    const { x, y } = item.getBoundingClientRect();
+    return { x: Math.round(x), y: Math.round(y) };
+  }));
+  // 全會所 and the first two districts on top, the other two below, starting under 全會所.
+  let at = await boxes();
+  expect(new Set(at.slice(0, 3).map((box) => box.y)).size).toBe(1);
+  expect(at[3].y).toBe(at[4].y);
+  expect(at[3].y).toBeGreaterThan(at[0].y);
+  expect(at[3].x).toBe(at[0].x);
+  expect(at[4].x).toBe(at[1].x);
+  await page.setViewportSize({ width: 390, height: 900 });
+  await expect.poll(async () => new Set((await boxes()).map((box) => box.x)).size).toBe(1);
+  at = await boxes();
+  expect(at.every((box, index) => index === 0 || box.y > at[index - 1].y)).toBe(true);
 });
 
 test("admin forms and statistics are compact: fields share rows on wide screens and stack on phones", async ({ page }) => {

@@ -54,7 +54,9 @@
           <h2>登記名單</h2>
           <form id="search-form" class="staff-search inline-form">
             <label>姓名或流水號<input name="search" maxlength="100" /></label>
+            <label>區<select name="district_id"><option value="">全部區</option></select></label>
             <button type="submit">搜尋</button>
+            <button id="clear-search" type="button" class="secondary" disabled>清除條件</button>
           </form>
           <p id="registration-count"></p>
           <div class="table-scroll"><table id="registration-table"><thead><tr><th>流水號</th><th>姓名</th><th>區</th><th>狀態</th><th>匯入大會</th><th>更新時間</th><th>操作</th></tr></thead><tbody id="registration-rows"></tbody></table></div>
@@ -122,7 +124,7 @@
         <section id="section-stats" class="card" data-view="section-stats">
           <h2>統計與匯出</h2>
           <p>依目前公開活動與有效登記計算。</p>
-          <div class="staff-actions"><button id="refresh-stats" type="button">更新統計</button><button id="download-csv" type="button" class="secondary">下載 CSV</button><button id="download-stats-csv" type="button" class="secondary">下載統計 CSV</button></div>
+          <div class="staff-actions"><button id="refresh-stats" type="button">更新統計</button><button id="download-csv" type="button" class="secondary">下載報名登記 CSV</button><button id="download-stats-csv" type="button" class="secondary">下載統計 CSV</button></div>
           <p id="stats-summary"></p>
           <h3>各活動</h3>
           <div class="table-scroll"><table class="numeric"><thead><tr><th>活動</th><th>參加</th><th>其中學生</th><th>不參加</th><th>未回覆</th><th>預估費用</th><th>預估成本</th><th>預估補貼</th></tr></thead><tbody id="stats-rows"></tbody></table></div>

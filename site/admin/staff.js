@@ -12,6 +12,8 @@ let reference;
 let page = 0;
 let count = 0;
 let search = "";
+// The 區 filter's district id as the select gives it; "" means every district.
+let district = "";
 let visibleRegistrations = [];
 let selectedRegistration;
 let editingRegistration = false;
@@ -143,6 +145,10 @@ function clearSession() {
   setReordering(false);
   // The 協助登記 form keeps input across redraws, so a shared device must not hand it to the next login.
   document.querySelector("#new-registration-form").reset();
+  // The list's conditions belong to this login too.
+  document.querySelector("#search-form").reset();
+  [page, search, district] = [0, "", ""];
+  document.querySelector("#clear-search").disabled = true;
   for (const selector of ["#registration-rows", "#staff-rows"]) {
     document.querySelector(selector).replaceChildren();
   }
@@ -464,7 +470,7 @@ async function saveReference(event, kind) {
 }
 
 async function loadRegistrations() {
-  const result = await api("list_registrations", { page, search });
+  const result = await api("list_registrations", { page, search, ...(district && { district_id: Number(district) }) });
   count = result.count ?? 0;
   document.querySelector("#registration-count").textContent = `共 ${count} 筆`;
   document.querySelector("#page-number").textContent = `第 ${page + 1} 頁`;
@@ -770,6 +776,11 @@ function syncDetailMeals() {
 
 // Redrawn whenever districts or activities change, so it keeps what staff already entered.
 function renderNewRegistrationForm() {
+  const filter = document.querySelector("#search-form").elements.district_id;
+  const filtered = filter.value;
+  filter.replaceChildren(new Option("全部區", ""));
+  for (const item of reference.districts) filter.add(new Option(item.name, item.id));
+  filter.value = filtered;
   const form = document.querySelector("#new-registration-form");
   const entered = new FormData(form);
   const districts = form.elements.district_id;
@@ -1169,20 +1180,41 @@ document.querySelector("#close-staff-editor").addEventListener("click", () => {
   editingStaff = null;
 });
 
-// A failed load keeps the previous page and search, so the controls match the rows on screen.
-async function showRegistrations(nextPage, nextSearch = search) {
-  const previous = [page, search];
-  [page, search] = [nextPage, nextSearch];
+// A failed load keeps the previous page and conditions, so the controls match the rows on screen.
+async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district) {
+  const previous = [page, search, district];
+  [page, search, district] = [nextPage, nextSearch, nextDistrict];
   try {
     await loadRegistrations();
+    return true;
   } catch (error) {
-    [page, search] = previous;
+    // A 401 has already logged out and cleared the conditions; restoring them would hand them to the next login.
+    if (session) [page, search, district] = previous;
     showMessage(error.message, true);
+    return false;
+  } finally {
+    updateClearSearch();
   }
 }
-document.querySelector("#search-form").addEventListener("submit", (event) => {
+const searchForm = document.querySelector("#search-form");
+// Enabled while either the typed or the applied conditions are set, so a filter typed away but still on the list can be cleared.
+function updateClearSearch() {
+  document.querySelector("#clear-search").disabled = !search && !district
+    && !searchForm.elements.search.value.trim() && !searchForm.elements.district_id.value;
+}
+searchForm.addEventListener("input", updateClearSearch);
+searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  showRegistrations(0, String(new FormData(event.currentTarget).get("search")).trim());
+  showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value);
+});
+document.querySelector("#clear-search").addEventListener("click", async () => {
+  const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value];
+  searchForm.reset();
+  // A failed load keeps the conditions from before the click, in the fields as well as on the list.
+  if (!await showRegistrations(0, "", "") && session) {
+    [searchForm.elements.search.value, searchForm.elements.district_id.value] = entered;
+    updateClearSearch();
+  }
 });
 document.querySelector("#refresh-stats").addEventListener("click", () =>
   showStatistics().catch((error) => showMessage(error.message, true)));

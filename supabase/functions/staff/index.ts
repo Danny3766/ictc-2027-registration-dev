@@ -43,6 +43,11 @@ export function validMealIdentity(value) {
   return value === undefined || value === null || value === "general" || value === "student";
 }
 
+// The registration list's 區 filter: left out (or null) means every district.
+export function validDistrictFilter(value) {
+  return value === undefined || value === null || (Number.isSafeInteger(value) && value > 0);
+}
+
 function projectKey(name, fallback) {
   try {
     return JSON.parse(Deno.env.get(name) ?? "{}").default ?? Deno.env.get(fallback);
@@ -162,6 +167,7 @@ export async function handler(request) {
     if (beforeSerial !== null && (!Number.isSafeInteger(beforeSerial) || beforeSerial < 1)) {
       return response({ error: "INVALID_REQUEST" }, 400);
     }
+    if (!validDistrictFilter(body.district_id)) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
       .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,registration_choices(activity_id,attending),meal_identity,registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)",
         beforeSerial === null ? { count: "exact" } : undefined)
@@ -175,6 +181,7 @@ export async function handler(request) {
       query = /^\d{1,15}$/.test(body.search) ? query.eq("serial_no", Number(body.search))
         : query.ilike("name_key", `%${nameKey(body.search).replaceAll(/[%*,()]/g, "").replaceAll(/[\\_]/g, "\\$&")}%`);
     }
+    if (body.district_id != null) query = query.eq("district_id", body.district_id);
     const { data, count, error } = await query;
     if (error) {
       console.error("Failed to list registrations", error);

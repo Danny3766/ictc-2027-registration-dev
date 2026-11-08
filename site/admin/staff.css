@@ -36,6 +36,9 @@ textarea { width: 100%; min-height: 6rem; padding: .65rem .75rem; border: 1px so
 .staff-form legend { margin-bottom: .25rem; font-weight: 600; }
 .inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; max-width: 40rem; }
 .inline-form > button { margin-top: 0; }
+#search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) auto auto; max-width: 52rem; }
+/* A select renders a little shorter than an input; filling the row keeps both labels and boxes level. */
+#search-form label { align-self: stretch; grid-template-rows: auto 1fr; }
 .staff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .staff-actions button { margin-top: 0; }
 .pager { justify-content: center; }
@@ -107,6 +110,10 @@ main.wide .compact-form { max-width: none; }
 .stat-cards .table-scroll { margin: 0; }
 /* A narrow card fits its three or four columns: tighter cells, and headers and names may wrap. */
 .stat-cards :is(th, td) { padding-inline: .4rem; white-space: normal; }
+/* 各區各活動: three cards a row on wide screens, so 全會所 and four districts read as 3 + 2; phones keep one a row. */
+@media (min-width: 56rem) {
+  #district-activity-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 tr.total td { border-top: 2px solid #c9d4ce; background: #f6f9f7; font-weight: 700; }
 
 .table-scroll { overflow-x: auto; margin: .5rem 0 1rem; }
@@ -163,6 +170,9 @@ tr.dragging .drag-handle { cursor: grabbing; }
 
 @media (max-width: 42rem) {
   .inline-form { grid-template-columns: 1fr; }
+  /* Fields stack; 搜尋 and 清除條件 share the last row. */
+  #search-form { grid-template-columns: 1fr 1fr; }
+  #search-form label { grid-column: 1 / -1; }
   .staff-nav { position: static; }
   th, td { padding: .45rem .4rem; }
   /* The update time column is the least useful on a phone; hiding it keeps name and action visible. */
