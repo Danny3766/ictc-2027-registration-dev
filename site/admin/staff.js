@@ -25,6 +25,31 @@ function showAdminSections(visible) {
   for (const link of document.querySelectorAll("[data-admin-link]")) link.hidden = !visible;
 }
 
+// One view at a time under the navigation. Views hide by class, separate from each section's own
+// `hidden`, so half-filled forms and an open record survive switching. The view is kept for this
+// sign-in only (cleared at 登出), so a refresh stays put; the URL never changes.
+const viewKey = "ictc_staff_view";
+const navLinks = Array.from(document.querySelectorAll(".staff-nav a"));
+function showView(name) {
+  const allowed = (view) => navLinks.some((link) => link.hash === `#${view}` && (!link.hasAttribute("data-admin-link") || profile?.role === "admin"));
+  const view = allowed(name) ? name : "section-registrations";
+  for (const section of document.querySelectorAll("[data-view]")) section.classList.toggle("view-off", section.dataset.view !== view);
+  for (const link of navLinks) {
+    if (link.hash === `#${view}`) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
+  }
+  sessionStorage.setItem(viewKey, view);
+}
+for (const link of navLinks) {
+  link.addEventListener("click", (event) => {
+    // A click that opens a new tab or window leaves this page as it is.
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    showView(link.hash.slice(1));
+    window.scrollTo(0, 0);
+  });
+}
+
 // Labels for stored codes, so the page never shows values like "reimport_needed" or "admin".
 const labels = {
   record: { active: "有效", void: "作廢", cancelled: "已取消" },
@@ -100,6 +125,8 @@ document.querySelector("#message-close").addEventListener("click", hideMessage);
 function clearSession() {
   session = null;
   sessionStorage.removeItem(sessionKey);
+  // The next person to sign in on this device starts at 登記名單.
+  sessionStorage.removeItem(viewKey);
   profile = null;
   loginPanel.hidden = false;
   changePasswordPanel.hidden = true;
@@ -877,12 +904,19 @@ async function openStaff() {
   document.querySelector("#identity").textContent = `${profile.display_name}｜${label("role", profile.role)}`;
   if (profile.must_change_password) return;
   const isAdmin = profile.role === "admin";
+  showView(sessionStorage.getItem(viewKey));
   showAdminSections(false);
-  reference = await api("list_reference");
-  // renderReference also builds the new-registration form, so it runs once either way.
-  if (isAdmin) renderReference();
-  else renderNewRegistrationForm();
-  await Promise.all([loadRegistrations(), ...(isAdmin ? [loadStaff()] : [])]);
+  try {
+    reference = await api("list_reference");
+    // renderReference also builds the new-registration form, so it runs once either way.
+    if (isAdmin) renderReference();
+    else renderNewRegistrationForm();
+    await Promise.all([loadRegistrations(), ...(isAdmin ? [loadStaff()] : [])]);
+  } catch (error) {
+    // Admin views stay hidden when loading fails; a kept admin view would leave the page blank.
+    showView("section-registrations");
+    throw error;
+  }
   showAdminSections(isAdmin);
 }
 

@@ -27,6 +27,9 @@ async function mockStaff(page, role, onRequest = () => {}, registrationName = "�
   });
 }
 
+// Only one view shows at a time, so a test opens the one it works in from the navigation.
+const go = (page, view) => page.locator(".staff-nav").getByRole("link", { name: view, exact: true }).click();
+
 test("staff registration edit sends all published activity choices", async ({ page }) => {
   let saved;
   await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; });
@@ -51,6 +54,7 @@ test("CSV neutralizes spreadsheet formulas", async ({ page }, testInfo) => {
   await page.locator('#login-form input[name="username"]').fill("tester");
   await page.locator('#login-form input[name="password"]').fill("test-password");
   await page.getByRole("button", { name: "登入" }).click();
+  await go(page, "統計與匯出");
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載 CSV" }).click();
   const csv = await readFile(await (await download).path(), "utf8");
@@ -67,8 +71,13 @@ for (const role of ["staff", "admin"]) {
     await page.getByRole("button", { name: "登入" }).click();
     await expect(page.getByText("測試登記")).toBeVisible();
     await expect(page.locator("#login-panel")).toBeHidden();
-    if (role === "admin") await expect(page.locator("#admin-accounts")).toBeVisible();
-    else await expect(page.locator("#admin-accounts")).toBeHidden();
+    if (role === "admin") {
+      await go(page, "帳號");
+      await expect(page.locator("#admin-accounts")).toBeVisible();
+    } else {
+      await expect(page.locator('.staff-nav a[href="#admin-accounts"]')).toBeHidden();
+      await expect(page.locator("#admin-accounts")).toBeHidden();
+    }
     await expect(page.locator('#new-registration-form select[name="district_id"] option')).toHaveCount(2);
     await expect(page.locator('#new-registration-choices input[name="activity_1"]')).toHaveCount(2);
     await page.getByRole("button", { name: "登出" }).click();
@@ -78,17 +87,75 @@ for (const role of ["staff", "admin"]) {
   });
 }
 
-async function login(page) {
+test("the navigation shows one view at a time, kept across a refresh until 登出", async ({ page }) => {
+  await mockStaff(page, "admin");
+  await login(page);
+  const shown = () => page.locator("#staff-panel > section.card").evaluateAll((sections) =>
+    sections.filter((section) => section.checkVisibility()).map((section) => section.id));
+  const current = page.locator('.staff-nav a[aria-current="page"]');
+  await expect(page.getByText("測試登記")).toBeVisible();
+  await expect.poll(shown).toEqual(["section-registrations"]);
+  await expect(current).toHaveText("登記名單");
+
+  // Switching hides the other views but keeps what was typed in them.
+  await go(page, "協助登記");
+  await page.locator('#new-registration-form input[name="full_name"]').fill("填到一半");
+  await go(page, "網站設定");
+  await expect.poll(shown).toEqual(["admin-settings"]);
+  await expect(current).toHaveText("網站設定");
+  expect(await page.evaluate(() => location.hash)).toBe("");
+  await go(page, "協助登記");
+  await expect(page.locator('#new-registration-form input[name="full_name"]')).toHaveValue("填到一半");
+
+  await go(page, "網站設定");
+  await page.reload();
+  await expect.poll(shown).toEqual(["admin-settings"]);
+  await expect(current).toHaveText("網站設定");
+
+  // The next person to sign in starts at 登記名單.
+  await page.getByRole("button", { name: "登出" }).click();
+  await page.locator('#login-form input[name="username"]').fill("tester");
+  await page.locator('#login-form input[name="password"]').fill("test-password");
+  await page.getByRole("button", { name: "登入" }).click();
+  await expect.poll(shown).toEqual(["section-registrations"]);
+});
+
+test("staff with an admin view kept from before land on 登記名單", async ({ page }) => {
+  await mockStaff(page, "staff");
+  await page.addInitScript(() => sessionStorage.setItem("ictc_staff_view", "admin-settings"));
+  await login(page);
+  await expect(page.getByText("測試登記")).toBeVisible();
+  await expect(page.locator("#section-registrations")).toBeVisible();
+  await expect(page.locator("#admin-settings")).toBeHidden();
+  await expect(page.locator('.staff-nav a[aria-current="page"]')).toHaveText("登記名單");
+});
+
+test("an admin view kept across a refresh falls back to 登記名單 when loading fails", async ({ page }) => {
+  let outage = false;
+  await mockStaff(page, "admin", () => {}, "測試登記", {
+    list_reference: () => (outage ? { status: 503, json: { error: "後台資料載入失敗" } } : undefined),
+  });
+  await login(page, "網站設定");
+  await expect(page.locator("#admin-settings")).toBeVisible();
+  outage = true;
+  await page.reload();
+  await expect(page.locator("#message")).toHaveText("後台資料載入失敗");
+  await expect(page.locator("#section-registrations")).toBeVisible();
+  await expect(page.locator('.staff-nav a[aria-current="page"]')).toHaveText("登記名單");
+});
+
+async function login(page, view) {
   await page.goto("/admin/");
   await page.locator('#login-form input[name="username"]').fill("tester");
   await page.locator('#login-form input[name="password"]').fill("test-password");
   await page.getByRole("button", { name: "登入" }).click();
+  if (view) await go(page, view);
 }
 
 test("activity sort is preserved when editing and defaults to the end when creating", async ({ page }) => {
   const saved = [];
   await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved.push(payload.data); }, "測試登記", threeActivities);
-  await login(page);
+  await login(page, "活動");
   await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).first().click();
   await page.locator('#activity-form input[name="sort_order"]').fill("");
   await page.locator("#activity-form").getByRole("button", { name: /^儲存活動/ }).click();
@@ -115,7 +182,7 @@ test("activity dates allow an optional Taiwan time", async ({ page }) => {
       program: [],
     } }),
   });
-  await login(page);
+  await login(page, "活動");
   // Only the 開始 column: the row also holds the collapsed details' 時間 line.
   const startCell = page.locator("#activity-rows tr").first().locator("td").nth(2);
   await expect(startCell).toHaveText("2/20");
@@ -151,7 +218,7 @@ test("clicking an activity title shows its content without editing", async ({ pa
       program: [],
     } }),
   });
-  await login(page);
+  await login(page, "活動");
   const first = page.locator("#activity-rows tr").first();
   await expect(first.locator("dl")).toBeHidden();
   await first.getByText("週六午餐").click();
@@ -203,7 +270,7 @@ test("an open activity keeps the table width and its buttons on screen", async (
       program: [],
     } }),
   });
-  await login(page);
+  await login(page, "活動");
   const scroll = page.locator("#admin-activities .table-scroll");
   const width = () => scroll.evaluate((element) => element.scrollWidth);
   const title = page.locator("#activity-rows").getByText("午餐", { exact: true });
@@ -222,7 +289,7 @@ test("an open activity keeps the table width and its buttons on screen", async (
 test("cancelling an edit makes the next save create a new row", async ({ page }) => {
   const saved = [];
   await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved.push(payload.data); }, "測試登記", threeActivities);
-  await login(page);
+  await login(page, "活動");
   const form = page.locator("#activity-form");
   await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).first().click();
   await expect(form.locator('button[type="submit"]')).toHaveText("儲存活動（編輯：活動甲）");
@@ -258,7 +325,7 @@ test("retrying a failed back-office registration reuses its request id", async (
         : { status: 201, json: { serial_no: 2 } };
     },
   });
-  await login(page);
+  await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
   await form.locator('input[name="full_name"]').fill("協助測試");
   await form.locator('select[name="district_id"]').selectOption("1");
@@ -286,7 +353,7 @@ test("admins set another account's password, but change their own with the curre
     set_staff_password: () => ({ json: { success: true } }),
   });
   page.on("dialog", (dialog) => dialog.accept());
-  await login(page);
+  await login(page, "帳號");
   const rows = page.locator("#staff-rows tr");
   await expect(rows).toHaveCount(2);
   await expect(page.getByRole("button", { name: "重設密碼" })).toHaveCount(0);
@@ -315,7 +382,7 @@ test("admins create accounts with a password and no district, and rename them", 
     create_staff: () => ({ status: 201, json: { success: true } }),
     update_staff: () => ({ json: { success: true } }),
   });
-  await login(page);
+  await login(page, "帳號");
   const create = page.locator("#create-staff-form");
   await expect(create.locator('select[name="district_id"]')).toHaveCount(0);
   await create.locator('input[name="username"]').fill("newhelper");
@@ -414,7 +481,7 @@ test("statistics show one card per district, with its activities and a district 
       registration("223e4567-e89b-42d3-a456-426614174001", 1, [{ activity_id: 1, attending: false }]),
     ] } }),
   });
-  await login(page);
+  await login(page, "統計與匯出");
   await page.getByRole("button", { name: "更新統計" }).click();
   const cards = page.locator("#district-activity-cards > .mini-card");
   await expect(cards).toHaveCount(4);
@@ -467,23 +534,31 @@ test("a message from before login is cleared once login succeeds", async ({ page
 });
 
 test("admin layout fits phones, tablets and desktops without page-level horizontal scrolling", async ({ page }) => {
+  // Every view at every width: 48 view switches.
+  test.slow();
   await mockStaff(page, "admin");
   await login(page);
   await expect(page.getByText("測試登記")).toBeVisible();
   for (const width of [360, 390, 768, 1024, 1366, 1920]) {
     await page.setViewportSize({ width, height: 900 });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px page overflow`).toBeLessThanOrEqual(width);
+    for (const view of ["登記名單", "協助登記", "統計與匯出", "帳號", "網站設定", "開家與接機接待", "活動", "時間表"]) {
+      await go(page, view);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth), `${width}px ${view} page overflow`).toBeLessThanOrEqual(width);
+      // Wide tables scroll inside their own box instead of widening the page.
+      for (const box of await page.locator(".table-scroll").all()) {
+        if (!await box.isVisible()) continue;
+        const { right } = await box.evaluate((element) => element.getBoundingClientRect());
+        expect(right, `${width}px ${view} table box inside viewport`).toBeLessThanOrEqual(width);
+      }
+    }
     await expect(page.locator(".staff-nav")).toBeVisible();
     const logout = await page.getByRole("button", { name: "登出" }).boundingBox();
     expect(logout.x + logout.width, `${width}px logout inside viewport`).toBeLessThanOrEqual(width);
-    // Wide tables scroll inside their own box instead of widening the page.
-    for (const box of await page.locator(".table-scroll").all()) {
-      const { right } = await box.evaluate((element) => element.getBoundingClientRect());
-      expect(right, `${width}px table box inside viewport`).toBeLessThanOrEqual(width);
-    }
     // Check boxes and row buttons keep their natural size instead of the public form's full width.
+    await go(page, "協助登記");
     const radio = await page.locator('#new-registration-choices input[type="radio"]').first().boundingBox();
     expect(radio.width, `${width}px radio size`).toBeLessThan(32);
+    await go(page, "登記名單");
     const rowButton = await page.getByRole("button", { name: "查看／處理" }).first().boundingBox();
     expect(rowButton.width, `${width}px row button size`).toBeLessThan(160);
   }
@@ -509,7 +584,7 @@ test("activities can be reordered by dragging or arrow keys and saved together",
     ...threeActivities,
     reorder_activities: () => ({ json: { success: true } }),
   });
-  await login(page);
+  await login(page, "活動");
   const handles = page.locator("#activity-rows .drag-handle");
   await expect(handles.first()).toBeHidden();
   await page.getByRole("button", { name: "調整排序" }).click();
@@ -544,7 +619,7 @@ test("activities can be reordered by dragging or arrow keys and saved together",
 test("cancelling a reorder restores the order without saving", async ({ page }) => {
   let saved = false;
   await mockStaff(page, "admin", (payload) => { if (payload.action === "reorder_activities") saved = true; }, "測試登記", threeActivities);
-  await login(page);
+  await login(page, "活動");
   await page.getByRole("button", { name: "調整排序" }).click();
   await page.locator("#activity-rows .drag-handle").first().focus();
   await page.keyboard.press("ArrowDown");
@@ -556,7 +631,7 @@ test("cancelling a reorder restores the order without saving", async ({ page }) 
 
 test("saving a reorder updates the sort order of an activity edit that is already open", async ({ page }) => {
   await mockStaff(page, "admin", () => {}, "測試登記", { ...threeActivities, reorder_activities: () => ({ json: { success: true } }) });
-  await login(page);
+  await login(page, "活動");
   await page.locator("#activity-rows tr").first().getByRole("button", { name: "編輯" }).click();
   await expect(page.locator('#activity-form input[name="sort_order"]')).toHaveValue("1");
   await page.getByRole("button", { name: "調整排序" }).click();
@@ -571,17 +646,20 @@ test("saving a reorder updates the sort order of an activity edit that is alread
 test("while reordering, settings still save and keep the drag order, activities wait, and cancelling keeps 協助登記 input", async ({ page }) => {
   const saves = [];
   await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saves.push(payload.kind); }, "測試登記", threeActivities);
-  await login(page);
+  await login(page, "協助登記");
   const newForm = page.locator("#new-registration-form");
   await newForm.locator('input[name="full_name"]').fill("協助測試");
   await newForm.locator('select[name="district_id"]').selectOption("1");
   await newForm.locator('input[name="activity_2"][value="true"]').check();
 
+  await go(page, "活動");
   await page.getByRole("button", { name: "調整排序" }).click();
   await page.locator("#activity-rows .drag-handle").first().focus();
   await page.keyboard.press("ArrowDown");
+  await go(page, "網站設定");
   await page.getByRole("button", { name: "儲存網站設定" }).click();
   await expect(page.locator("#message")).toHaveText("設定已儲存。");
+  await go(page, "活動");
   expect(await activityTitles(page)).toEqual(["活動乙", "活動甲", "活動丙"]);
   await expect(page.getByRole("button", { name: "完成排序" })).toBeVisible();
 
@@ -604,7 +682,7 @@ test("a saved reorder updates the page without reloading the reference data", as
     ...threeActivities,
     reorder_activities: () => ({ json: { success: true } }),
   });
-  await login(page);
+  await login(page, "活動");
   await page.getByRole("button", { name: "調整排序" }).click();
   await page.locator("#activity-rows .drag-handle").first().focus();
   await page.keyboard.press("ArrowDown");
@@ -623,7 +701,7 @@ test("a reorder rejected because the list changed reloads the activities and lea
     list_reference: () => ({ json: rejected ? changed : threeActivities.list_reference().json }),
     reorder_activities: () => { rejected = true; return { status: 409, json: { error: "活動清單已有變動，請重新整理後再排序" } }; },
   });
-  await login(page);
+  await login(page, "活動");
   await page.getByRole("button", { name: "調整排序" }).click();
   await page.locator("#activity-rows .drag-handle").first().focus();
   await page.keyboard.press("ArrowDown");
@@ -635,7 +713,7 @@ test("a reorder rejected because the list changed reloads the activities and lea
 
 test("leaving reorder mode in the middle of a drag ends the drag", async ({ page }) => {
   await mockStaff(page, "admin", () => {}, "測試登記", threeActivities);
-  await login(page);
+  await login(page, "活動");
   await page.getByRole("button", { name: "調整排序" }).click();
   await page.locator("#activity-rows").evaluate((element) => element.scrollIntoView({ block: "center" }));
   const from = await page.locator("#activity-rows .drag-handle").first().boundingBox();
@@ -652,7 +730,7 @@ test("leaving reorder mode in the middle of a drag ends the drag", async ({ page
 
 test("the reorder buttons are fully on screen: in the table header on wide screens, beside the title on phones", async ({ page }) => {
   await mockStaff(page, "admin", () => {}, "測試登記", threeActivities);
-  await login(page);
+  await login(page, "活動");
   const { width } = page.viewportSize();
   // toBeVisible ignores clipping by the table's scroll box, so check the button's box against the screen.
   const onScreen = async (name) => {
@@ -676,7 +754,7 @@ test("the reorder buttons are fully on screen: in the table header on wide scree
 test("success messages float at the bottom and leave after 5 seconds; errors stay until closed", async ({ page }) => {
   await page.clock.install();
   await mockStaff(page, "admin", () => {}, "測試登記", threeActivities);
-  await login(page);
+  await login(page, "網站設定");
   await page.getByRole("button", { name: "儲存網站設定" }).click();
   await expect(page.locator("#message")).toHaveText("設定已儲存。");
   await expect(page.getByRole("status")).toHaveText("設定已儲存。");
@@ -685,6 +763,7 @@ test("success messages float at the bottom and leave after 5 seconds; errors sta
   await page.clock.fastForward(6000);
   await expect(page.locator("#message")).toBeHidden();
 
+  await go(page, "活動");
   await page.getByRole("button", { name: "調整排序" }).click();
   await page.locator('#activity-form input[name="title"]').fill("新活動");
   await page.locator('#activity-form input[name="sort_order"]').fill("9");
@@ -845,7 +924,7 @@ test("協助登記 must answer hosting while the public survey is open", async (
     } }),
     create_registration: (payload) => { created = payload; return { status: 201, json: { serial_no: 2 } }; },
   });
-  await login(page);
+  await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
   await form.locator('input[name="full_name"]').fill("協助接待");
   await form.locator('select[name="district_id"]').selectOption("1");
@@ -864,7 +943,7 @@ test("協助登記 must answer hosting while the public survey is open", async (
 
 test("statistics count hosting answers and capacity", async ({ page }) => {
   await mockStaff(page, "staff", () => {}, "測試登記", hostedRegistrations);
-  await login(page);
+  await login(page, "統計與匯出");
   await page.getByRole("button", { name: "更新統計" }).click();
   const answers = page.locator("#hosting-status-stats-rows tr");
   await expect(answers).toHaveCount(4);
@@ -890,7 +969,7 @@ test("statistics count hosting answers and capacity", async ({ page }) => {
 test("statistics CSV includes the visible sections and omits the family hosting count", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await mockStaff(page, "staff", () => {}, "測試登記", hostedRegistrations);
-  await login(page);
+  await login(page, "統計與匯出");
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載統計 CSV" }).click();
   const file = await download;
@@ -911,7 +990,7 @@ test("statistics CSV includes the visible sections and omits the family hosting 
 test("CSV adds the hosting and meal columns", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await mockStaff(page, "staff", () => {}, "測試登記", hostedRegistrations);
-  await login(page);
+  await login(page, "統計與匯出");
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載 CSV" }).click();
   const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
@@ -926,7 +1005,7 @@ test("admins save the hosting switch and description from their own card", async
   let saved;
   await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved = payload; });
   page.on("dialog", (dialog) => dialog.accept());
-  await login(page);
+  await login(page, "開家與接機接待");
   const form = page.locator("#hosting-settings-form");
   await form.getByLabel("開放開家接待調查").check();
   await form.locator('textarea[name="hosting_description"]').fill("接待期間 2/19～2/22");
@@ -944,10 +1023,11 @@ test("a 協助登記 pickup answer survives a settings save", async ({ page }) =
     activities: [{ id: 1, title: "測試聚會", is_published: true, fee_amount: 0 }], program: [],
   } });
   await mockStaff(page, "admin", () => {}, "測試登記", { list_reference: openReference });
-  await login(page);
+  await login(page, "協助登記");
   const pickup = page.locator("#new-registration-pickup");
   await pickup.locator('[name="pickup_status"][value="yes"]').check();
   await pickup.locator('[name="pickup_count"]').selectOption("4");
+  await go(page, "網站設定");
   await page.locator("#settings-form").getByRole("button", { name: "儲存網站設定" }).click();
   await expect(page.locator("#message")).toHaveText("設定已儲存。");
   await expect(pickup.locator('[name="pickup_count"]')).toHaveValue("4");
@@ -956,7 +1036,7 @@ test("a 協助登記 pickup answer survives a settings save", async ({ page }) =
 test("admins save the site note from the right side of the settings card", async ({ page }) => {
   let saved;
   await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved = payload; });
-  await login(page);
+  await login(page, "網站設定");
   const form = page.locator("#settings-form");
   const note = form.locator('textarea[name="event_note"]');
   await expect(note).toHaveAttribute("maxlength", "500");
@@ -1021,7 +1101,7 @@ test("協助登記 may leave hosting unanswered while the survey is closed, unti
         : { status: 201, json: { serial_no: 2 } };
     },
   });
-  await login(page);
+  await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
   await form.locator('input[name="full_name"]').fill("協助未答");
   await form.locator('select[name="district_id"]').selectOption("1");
@@ -1047,7 +1127,7 @@ test("a password set for another admin must be changed at their next login", asy
     set_staff_password: () => ({ json: { success: true, must_change_password: true } }),
   });
   page.on("dialog", (dialog) => dialog.accept());
-  await login(page);
+  await login(page, "帳號");
   await page.locator("#staff-rows tr").nth(1).getByRole("button", { name: "修改" }).click();
   const form = page.locator("#staff-password-form");
   await form.locator('input[name="password"]').fill("new-admin-password-1");
@@ -1087,7 +1167,7 @@ const mealReplies = (registrations = [
 
 test("statistics estimate fees by identity, with cost, subsidy and the sign-ups outside an audience", async ({ page }) => {
   await mockStaff(page, "staff", () => {}, "測試登記", mealReplies());
-  await login(page);
+  await login(page, "統計與匯出");
   await page.getByRole("button", { name: "更新統計" }).click();
   const rows = page.locator("#stats-rows tr");
   // Fictional amounts. 午餐: 甲 student 70 + 乙 general 120; cost 2 × 150.
@@ -1118,7 +1198,7 @@ test("statistics CSV uses active registrations and published activities for the 
       return result;
     },
   });
-  await login(page);
+  await login(page, "統計與匯出");
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載統計 CSV" }).click();
   const csv = await readFile(await (await download).path(), "utf8");
@@ -1136,7 +1216,7 @@ test("statistics name no activity once every charged one has a cost", async ({ p
     result.json.activities = result.json.activities.map((item) => item.id === 2 ? { ...item, cost_amount: 130 } : item);
     return result;
   } });
-  await login(page);
+  await login(page, "統計與匯出");
   await page.getByRole("button", { name: "更新統計" }).click();
   // Dinner cost 3 × 130 = 390, subsidy 390 − 260 = 130; the meeting has no fee, so it is not named.
   await expect(page.locator("#stats-summary")).toContainText("預估成本 NT$690；預估補貼 NT$240。");
@@ -1144,7 +1224,7 @@ test("statistics name no activity once every charged one has a cost", async ({ p
 
 test("statistics show no cost or subsidy until a cost is set", async ({ page }) => {
   await mockStaff(page, "staff", () => {}, "測試登記", twoActivities);
-  await login(page);
+  await login(page, "統計與匯出");
   await page.getByRole("button", { name: "更新統計" }).click();
   await expect(page.locator("#stats-summary")).toHaveText("有效登記 1 筆；預估費用 NT$0；預估成本 —；預估補貼 —（尚未設定實際成本）。");
 });
@@ -1152,7 +1232,7 @@ test("statistics show no cost or subsidy until a cost is set", async ({ page }) 
 test("CSV shows the meal identity only where it is needed, and the fee by identity", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await mockStaff(page, "staff", () => {}, "測試登記", mealReplies());
-  await login(page);
+  await login(page, "統計與匯出");
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載 CSV" }).click();
   const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
@@ -1173,7 +1253,7 @@ test("the activity form saves prices, cost and audience, and confirms restrictin
     return result;
   } };
   await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved.push(payload.data); }, "測試登記", open);
-  await login(page);
+  await login(page, "活動");
   const form = page.locator("#activity-form");
   await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).first().click();
   await expect(form.locator('input[name="fee_amount"]')).toHaveValue("120");
@@ -1267,7 +1347,7 @@ test("協助登記 follows the audience and asks the identity for a student-pric
     created = payload;
     return { status: 201, json: { serial_no: 5 } };
   } });
-  await login(page);
+  await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
   const lunch = form.locator('[data-activity="1"]');
   await expect(lunch.locator('input[value="true"]')).toBeDisabled();
@@ -1293,10 +1373,10 @@ test("admin forms and statistics are compact: fields share rows on wide screens 
   await mockStaff(page, "admin", () => {}, "測試登記", { list_staff: () => ({ json: { staff: [
     { auth_user_id: "123e4567-e89b-42d3-a456-426614174099", username: "helper", display_name: "測試服事者乙", role: "staff", is_active: true },
   ] } }) });
-  await login(page);
+  await login(page, "活動");
   await expect(page.locator("#section-new h2")).toHaveText("協助登記");
   await expect(page.locator('.staff-nav a[href="#section-new"]')).toHaveText("協助登記");
-  // Admin sections show once the profile loads; a hidden element measures as an empty box at 0, 0.
+  // A hidden element measures as an empty box at 0, 0, so each check opens its view first.
   await expect(page.locator("#activity-form")).toBeVisible();
   const wide = page.viewportSize().width >= 896;
   // Both boxes in one call: opening the staff editor scrolls smoothly, so separate reads would disagree.
@@ -1307,9 +1387,12 @@ test("admin forms and statistics are compact: fields share rows on wide screens 
   // A row of related fields, and a date beside its time even on a phone.
   expect(await sameRow('#activity-form label:has([name="category"])', '#activity-form label:has([name="title"])')).toBe(wide);
   expect(await sameRow('#activity-form label:has([name="starts_on"])', '#activity-form label:has([name="starts_time"])')).toBe(true);
+  await go(page, "時間表");
   expect(await sameRow('#program-form label:has([name="event_date"])', '#program-form label:has([name="start_time"])')).toBe(true);
+  await go(page, "帳號");
   expect(await sameRow('#create-staff-form label:has([name="username"])', '#create-staff-form label:has([name="display_name"])')).toBe(wide);
   // The short statistics tables share a row on wide screens.
+  await go(page, "統計與匯出");
   expect(await sameRow("#section-stats .stat-cards > :nth-child(1)", "#section-stats .stat-cards > :nth-child(2)")).toBe(wide);
   // Every statistics card fits its table without a sideways scroll bar (the 接機 card had one).
   await page.getByRole("button", { name: "更新統計" }).click();
@@ -1317,6 +1400,7 @@ test("admin forms and statistics are compact: fields share rows on wide screens 
   expect(await page.locator("#section-stats .stat-cards .table-scroll").evaluateAll((boxes) => boxes
     .filter((box) => box.scrollWidth > box.clientWidth).map((box) => box.closest(".mini-card").querySelector("h3").textContent))).toEqual([]);
   // 修改帳號 and 設定密碼 are two cards side by side.
+  await go(page, "帳號");
   await page.locator("#staff-rows tr").first().getByRole("button", { name: "修改" }).click();
   expect(await sameRow("#staff-editor > :nth-child(1)", "#staff-editor > :nth-child(2)")).toBe(wide);
   // Nothing widens the page.

@@ -50,7 +50,7 @@
           <button id="change-password-button" type="button" class="secondary">更改密碼</button>
           <button id="logout-button" type="button" class="secondary">登出</button>
         </nav>
-        <section id="section-registrations" class="card">
+        <section id="section-registrations" class="card" data-view="section-registrations">
           <h2>登記名單</h2>
           <form id="search-form" class="staff-search inline-form">
             <label>姓名或流水號<input name="search" maxlength="100" /></label>
@@ -61,7 +61,7 @@
           <div class="staff-actions pager"><button id="previous-page" type="button" class="secondary">上一頁</button><span id="page-number"></span><button id="next-page" type="button" class="secondary">下一頁</button></div>
         </section>
 
-        <section id="registration-detail" class="card" hidden>
+        <section id="registration-detail" class="card" data-view="section-registrations" hidden>
           <div class="detail-head">
             <h2 id="detail-title">登記資料</h2>
             <button id="start-registration-edit" type="button" class="secondary">修改登記資料</button>
@@ -101,7 +101,7 @@
           </div>
         </section>
 
-        <section id="section-new" class="card">
+        <section id="section-new" class="card" data-view="section-new">
           <h2>協助登記</h2>
           <form id="new-registration-form" class="staff-form registration-form">
             <div class="registration-columns registration-split">
@@ -119,7 +119,7 @@
           <p id="new-registration-code" class="message" hidden></p>
         </section>
 
-        <section id="section-stats" class="card">
+        <section id="section-stats" class="card" data-view="section-stats">
           <h2>統計與匯出</h2>
           <p>依目前公開活動與有效登記計算。</p>
           <div class="staff-actions"><button id="refresh-stats" type="button">更新統計</button><button id="download-csv" type="button" class="secondary">下載 CSV</button><button id="download-stats-csv" type="button" class="secondary">下載統計 CSV</button></div>
@@ -149,7 +149,7 @@
           <div id="district-activity-cards" class="stat-cards"></div>
         </section>
 
-        <section id="admin-accounts" class="card" hidden>
+        <section id="admin-accounts" class="card" data-view="admin-accounts" hidden>
           <h2>服事者帳號</h2>
           <p class="hint">密碼由管理員設定並私下交付，服事者不需再更改；替其他管理員設定的密碼，對方下次登入須改成自己的。請勿透過群組訊息傳送密碼。</p>
           <form id="create-staff-form" class="staff-form compact-form">
@@ -182,7 +182,7 @@
           </div>
         </section>
 
-        <section id="admin-settings" class="card" hidden>
+        <section id="admin-settings" class="card" data-view="admin-settings" hidden>
           <h2>網站與登記設定</h2>
           <form id="settings-form" class="staff-form registration-form">
             <div class="registration-columns">
@@ -204,7 +204,7 @@
           </form>
         </section>
 
-        <section id="admin-hosting" class="card" hidden>
+        <section id="admin-hosting" class="card" data-view="admin-hosting" hidden>
           <h2>開家與接機接待設定</h2>
           <form id="hosting-settings-form" class="staff-form registration-form">
             <div class="registration-columns registration-split">
@@ -225,7 +225,7 @@
           </form>
         </section>
 
-        <section id="admin-activities" class="card" hidden>
+        <section id="admin-activities" class="card" data-view="admin-activities" hidden>
           <h2>活動</h2>
           <p id="reorder-hint" class="hint" hidden>拖曳右側 ☰ 調整順序，或聚焦 ☰ 後按 ↑ ↓；完成後按「完成排序」儲存。</p>
           <div class="table-scroll"><table><thead><tr><th>名稱</th><th>類型</th><th>時間</th><th>公開</th><th>操作</th>
@@ -266,7 +266,7 @@
           </form>
         </section>
 
-        <section id="admin-program" class="card" hidden>
+        <section id="admin-program" class="card" data-view="admin-program" hidden>
           <h2>詳細時間表</h2>
           <div class="table-scroll"><table><thead><tr><th>日期</th><th>時間</th><th>項目</th><th>顯示</th><th>操作</th></tr></thead><tbody id="program-rows"></tbody></table></div>
           <h3>新增或編輯時間表項目</h3>

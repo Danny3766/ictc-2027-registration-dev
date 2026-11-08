@@ -23,6 +23,8 @@ textarea { width: 100%; min-height: 6rem; padding: .65rem .75rem; border: 1px so
   margin: 0 0 1rem; padding: .5rem .75rem; border: 1px solid #d8e1dc; border-radius: .75rem; background: #fff; box-shadow: 0 .25rem 1rem #173c2d14; }
 .staff-nav a { padding: .35rem .6rem; border-radius: .4rem; color: #23624b; font-weight: 600; text-decoration: none; }
 .staff-nav a:hover, .staff-nav a:focus-visible { background: #e8f1ec; }
+.staff-nav a[aria-current="page"] { background: #23624b; color: #fff; }
+.view-off { display: none !important; }
 .staff-nav button { margin: 0 0 0 auto; min-height: 2.25rem; padding: .3rem 1rem; }
 .staff-nav #logout-button { margin-left: 0; }
 .card { scroll-margin-top: 4.5rem; }
