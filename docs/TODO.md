@@ -351,7 +351,7 @@ Q43 已確認。
 決策見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-08 後台個人明細 CSV 按鈕改名」一節。
 
 - [x] 本機完成：「統計與匯出」的「下載 CSV」改為「下載報名登記 CSV」，下載檔名與內容不變；Playwright 改用新名稱。（2026-11-08）
-- [ ] 與「登記名單依區篩選」同一個分支一起發布，步驟見下一節；測試站確認按鈕文字與下載內容，正式站確認按鈕文字。
+- [x] 與「登記名單依區篩選」同一個分支一起發布，步驟見下一節；測試站確認按鈕文字與下載內容，正式站確認按鈕文字。（2026-11-08 PR #40、#41 完成）
 
 ## 本次新增必要範圍：登記名單依區篩選
 
@@ -359,11 +359,11 @@ Q43 已確認。
 
 - [x] 本機完成：登記名單加「區」下拉選單與「清除條件」按鈕；`staff` Edge Function 的 `list_registrations` 接受選填的 `district_id`（正整數），其他值回傳 `INVALID_REQUEST`；登出（包含登入過期）時清空名單條件。Edge Function 單元測試與 Playwright 已補。（2026-11-08）
 - [x] 本機完成：「各區各活動」小卡寬螢幕每列 3 張（上 3 下 2）、手機每列 1 張；Playwright 新增排列案例。決策見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-08 各區各活動小卡排版」一節。（2026-11-08）
-- [ ] PR `feat/admin-list-and-stats` → `develop`。
-- [ ] 測試專案：Dashboard 部署 `develop` 上的 `supabase/functions/staff/index.ts` 到 `staff` Edge Function（Verify JWT 維持開啟）。
-- [ ] 更新測試站前端，專案負責人確認區篩選、清除條件、CSV 按鈕文字與各區各活動小卡排列。
-- [ ] 正式專案：Dashboard 部署同一份 `staff` Edge Function（Verify JWT 維持開啟）。
-- [ ] PR `develop` → `main`，以 **Create a merge commit** 合併；部署後確認正式站後台的區篩選與按鈕文字。不需關閉登記。
+- [x] PR `feat/admin-list-and-stats` → `develop`。（2026-11-08 PR #40 完成）
+- [x] 測試專案：Dashboard 部署 `develop` 上的 `supabase/functions/staff/index.ts` 到 `staff` Edge Function（Verify JWT 維持開啟）。（2026-11-08）
+- [x] 更新測試站前端，專案負責人確認區篩選、清除條件、CSV 按鈕文字與各區各活動小卡排列。（2026-11-08）
+- [x] 正式專案：Dashboard 部署同一份 `staff` Edge Function（Verify JWT 維持開啟）。（2026-11-08）
+- [x] PR `develop` → `main`，以 **Create a merge commit** 合併；部署後確認正式站後台的區篩選與按鈕文字。不需關閉登記。（2026-11-08 PR #41 完成）
 
 - [x] 本機完成：`202611060003_revoke_default_api_grants.sql` 撤銷 Supabase 預設給 `anon`、`authenticated` 的資料表、序列與函式權限，只保留原本刻意開放的公開讀取，並停止新物件自動授權。在模擬 Supabase 預設權限的本機資料庫驗證：私有資料表匿名不可讀、函式匿名不可執行；四支 `supabase/testing` 驗證以 `service_role` 執行通過。
 - [x] 本機完成：`supabase/production/baseline_202611060003.sql` 依序串接 16 支 migration 成單一交易，與逐支執行比對結構、權限與初始資料完全一致。
