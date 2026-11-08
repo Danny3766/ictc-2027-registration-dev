@@ -332,9 +332,9 @@ Q43 已確認。
 決策見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-08 LINE 連結預覽與截止時間顯示」一節。
 
 - [x] 本機完成：首頁、登記完成頁與後台的 HTML 不再寫測試站提示文字，改由 JavaScript 在測試環境填入；首頁與登記完成頁加 `description`、`og:title`、`og:description`。Playwright 新增案例檢查三頁原始碼沒有「測試站」、首頁與登記完成頁有預覽說明，且測試環境仍顯示提示；完整測試套件 373 通過、19 略過。（2026-11-08）
-- [ ] PR `fix/link-preview-text` → `develop`，更新測試站，確認三頁仍顯示測試站提示。
-- [ ] PR `develop` → `main`，以 **Create a merge commit** 合併；部署後依[正式環境設定流程](正式環境setup.md)第 7-4 節核對，並確認三頁原始碼沒有「測試站」。不需關閉登記。
-- [ ] 專案負責人用 LINE Page Poker 清除正式網址的預覽快取，到群組重貼連結，確認預覽顯示新說明。結果記在[驗收紀錄](驗收紀錄.md)。
+- [x] PR `fix/link-preview-text` → `develop`，更新測試站，確認三頁仍顯示測試站提示。（2026-11-08 PR #37 完成）
+- [x] PR `develop` → `main`，以 **Create a merge commit** 合併；部署後依[正式環境設定流程](正式環境setup.md)第 7-4 節核對，並確認三頁原始碼沒有「測試站」。不需關閉登記。（2026-11-08 PR #38 完成）
+- [x] 專案負責人用 LINE Page Poker 清除正式網址的預覽快取，到群組重貼連結，確認預覽顯示新說明。結果記在[驗收紀錄](驗收紀錄.md)。（2026-11-08）
 
 - [x] 本機完成：`202611060003_revoke_default_api_grants.sql` 撤銷 Supabase 預設給 `anon`、`authenticated` 的資料表、序列與函式權限，只保留原本刻意開放的公開讀取，並停止新物件自動授權。在模擬 Supabase 預設權限的本機資料庫驗證：私有資料表匿名不可讀、函式匿名不可執行；四支 `supabase/testing` 驗證以 `service_role` 執行通過。
 - [x] 本機完成：`supabase/production/baseline_202611060003.sql` 依序串接 16 支 migration 成單一交易，與逐支執行比對結構、權限與初始資料完全一致。
