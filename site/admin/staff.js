@@ -74,7 +74,8 @@ function statusCell(row, group, value) {
   cell(row, "").append(badge);
 }
 
-if (config?.environment === "test") document.querySelector("#test-banner").hidden = false;
+// The banner text lives here, not in the HTML, so link previews (LINE) never pick it up on the real site.
+if (config?.environment === "test") Object.assign(document.querySelector("#test-banner"), { textContent: "測試站｜此處為測試資料", hidden: false });
 
 const toast = document.querySelector("#toast");
 let messageTimer;

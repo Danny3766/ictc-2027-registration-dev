@@ -1,7 +1,8 @@
 let data = null;
 try { data = JSON.parse(sessionStorage.getItem("registration_success") ?? "null"); } catch { data = null; }
 
-if (window.APP_CONFIG?.environment === "test") document.querySelector("#test-banner").hidden = false;
+// The banner text lives here, not in the HTML, so link previews (LINE) never pick it up on the real site.
+if (window.APP_CONFIG?.environment === "test") Object.assign(document.querySelector("#test-banner"), { textContent: "測試站｜請勿填寫正式登記資料", hidden: false });
 
 if (!data?.full_name) {
   location.replace("./index.html");

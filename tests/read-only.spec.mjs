@@ -1118,3 +1118,20 @@ for (const [refusal, error] of [
     await expect(page.getByRole("button", { name: "儲存修改" })).toBeVisible();
   });
 }
+
+test("link previews read the page description and never the test-site banner", async ({ page, request }) => {
+  for (const path of ["/", "/success.html", "/admin/"]) {
+    const response = await request.get(path);
+    // A missing page would also lack the banner text, so check that the real page came back.
+    expect(response.ok(), path).toBe(true);
+    const html = await response.text();
+    expect(html, path).toContain('id="test-banner"');
+    expect(html, path).not.toContain("測試站");
+    if (path !== "/admin/") expect(html, path).toContain('property="og:description" content="38 會所聖徒登記報名：聚會時間、住宿、用餐、接送一次填寫。"');
+  }
+  // The test site still shows the banner, filled in by the script.
+  await page.route("**/functions/v1/registration", (route) => route.fulfill({ json: openPage() }));
+  await page.goto("/");
+  await expect(page.locator("#test-banner")).toHaveText("測試站｜請勿填寫正式登記資料");
+  await expect(page.locator("#test-banner")).toBeVisible();
+});

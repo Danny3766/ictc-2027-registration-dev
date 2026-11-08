@@ -32,7 +32,8 @@ let editStartIdentity = null;
 let queriedCanChange = false;
 let editMode = false;
 
-if (config?.environment === "test") document.querySelector("#test-banner").hidden = false;
+// The banner text lives here, not in the HTML, so link previews (LINE) never pick it up on the real site.
+if (config?.environment === "test") Object.assign(document.querySelector("#test-banner"), { textContent: "測試站｜請勿填寫正式登記資料", hidden: false });
 // The success page keeps its summary across reloads; returning here clears it, so the next
 // person on a shared device starts without the previous person's details.
 sessionStorage.removeItem("registration_success");
