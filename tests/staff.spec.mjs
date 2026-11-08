@@ -1550,7 +1550,7 @@ const familyRow = (serial, name, extra = {}) => ({ id: `${serial}23e4567-e89b-42
   full_name: name, district_id: 1, record_status: "active", import_status: "pending", updated_at: "2026-11-09T00:00:00Z",
   registration_choices: [{ activity_id: 1, attending: true }], is_child: false, parent_name: null, ...extra });
 const family = [
-  familyRow(5, "王爸爸", { children: [3, 4], registration_hosting: { status: "hosting", guest_type: "any", guest_count: 2 } }),
+  familyRow(5, "王爸爸", { children: [{ serial_no: 3, full_name: "王大明" }, { serial_no: 4, full_name: "王小明" }], registration_hosting: { status: "hosting", guest_type: "any", guest_count: 2 } }),
   familyRow(4, "王小明", { is_child: true, parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
   familyRow(3, "王大明", { is_child: true, parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
   familyRow(2, "李小華", { is_child: true, parent_name: "李媽媽", district_id: 2 }),
@@ -1569,10 +1569,69 @@ test("親子 sits between 更新時間 and 操作: a child shows the parent's na
   await login(page);
   const headers = await page.locator("#registration-table th").allTextContents();
   expect(headers.slice(-3)).toEqual(["更新時間", "親子", "操作"]);
-  await expect(page.locator("#section-registrations .hint").filter({ hasText: "親子：" }))
-    .toHaveText("親子：兒童顯示登記時填的家長姓名；同區有效登記中有這位家長時，家長那列顯示 ✓ 與兒童流水號。");
-  await expect(page.locator("#registration-rows td:nth-child(7)")).toHaveText(["✓ 3、4", "王爸爸", "王爸爸", "李媽媽", ""]);
+  const familyHint = page.locator("#section-registrations .hint").filter({ hasText: "親子：" });
+  await expect(familyHint).toHaveText("親子：兒童顯示登記時填的家長姓名；同區有效登記中有這位家長時，家長那列顯示 ✓ 與兒童流水號（#），按「查看／處理」可看到兒童姓名。");
+  // The note has a warm grey background and a bold label so staff notice it.
+  await expect(familyHint).toHaveCSS("background-color", "rgb(243, 241, 238)");
+  await expect(familyHint.locator("strong")).toHaveText("親子：");
+  await expect(page.locator("#registration-rows td:nth-child(7)")).toHaveText(["✓ #3 #4", "王爸爸", "王爸爸", "李媽媽", ""]);
+  // The serial numbers are plain text; the record view is where a child's record opens.
+  await expect(page.locator("#registration-rows td:nth-child(7) button")).toHaveCount(0);
   await expect(page.locator("#registration-rows .parent-check")).toHaveCSS("color", "rgb(31, 122, 63)");
+});
+
+test("the 兒童 condition lists children only, with 區 and paging, and 清除條件 or 登出 clears it", async ({ page }) => {
+  const lists = [];
+  await mockStaff(page, "staff", () => {}, "測試登記", {
+    ...familyReplies,
+    list_registrations: (payload) => {
+      if (payload.before_serial !== undefined) return { json: { registrations: [] } };
+      lists.push(payload);
+      return { json: { count: 11, registrations: payload.children_only ? family.filter((row) => row.is_child) : family } };
+    },
+  });
+  await login(page);
+  const form = page.locator("#search-form");
+  const child = form.getByLabel("兒童");
+  const clear = page.getByRole("button", { name: "清除條件" });
+  // 兒童 sits after 區, level with the boxes, on a wide screen.
+  await expect(child).toBeVisible();
+  if (page.viewportSize().width > 700) {
+    const [district, box, text] = await Promise.all([form.locator("select").boundingBox(), child.boundingBox(),
+      child.locator("xpath=..").evaluate((label) => { const range = document.createRange(); range.selectNodeContents(label.lastChild);
+        return range.getBoundingClientRect().toJSON(); })]);
+    expect(box.x).toBeGreaterThan(district.x + district.width);
+    // The box and its text share one line, level with the 區 select.
+    for (const item of [box, text]) {
+      const middle = item.y + item.height / 2;
+      expect(middle).toBeGreaterThan(district.y);
+      expect(middle).toBeLessThan(district.y + district.height);
+    }
+  }
+  await child.check();
+  await expect(clear).toBeEnabled();
+  await form.locator('select[name="district_id"]').selectOption({ label: "林森" });
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect(page.locator("#registration-rows tr")).toHaveCount(3);
+  await page.locator("#next-page").click();
+  await expect(page.locator("#page-number")).toHaveText("第 2 頁");
+  expect(lists.slice(1)).toEqual([
+    { action: "list_registrations", page: 0, search: "", district_id: 1, children_only: true },
+    { action: "list_registrations", page: 1, search: "", district_id: 1, children_only: true },
+  ]);
+  await clear.click();
+  await expect(child).not.toBeChecked();
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+
+  await child.check();
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.at(-1).children_only).toBe(true);
+  await page.getByRole("button", { name: "登出" }).click();
+  await page.locator('#login-form input[name="username"]').fill("tester");
+  await page.locator('#login-form input[name="password"]').fill("test-password");
+  await page.getByRole("button", { name: "登入" }).click();
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  await expect(child).not.toBeChecked();
 });
 
 test("協助登記 for a child hides both surveys and requires the parent's name at the bottom", async ({ page }) => {
@@ -1604,6 +1663,52 @@ test("協助登記 for a child hides both surveys and requires the parent's name
   await expect(form.getByLabel("兒童")).not.toBeChecked();
   await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(form.locator(".parent-name")).toBeHidden();
+});
+
+test("a parent's record lists the children by name, and a name opens that child's record by serial number", async ({ page }) => {
+  const lists = [];
+  await mockStaff(page, "staff", () => {}, "測試登記", {
+    ...familyReplies,
+    list_registrations: (payload) => {
+      if (payload.before_serial !== undefined) return { json: { registrations: [] } };
+      lists.push(payload);
+      const rows = payload.search ? family.filter((row) => String(row.serial_no) === payload.search) : family;
+      return { json: { count: rows.length, registrations: rows } };
+    },
+  });
+  await login(page);
+  const children = page.locator("#detail-children");
+  // A record without children has no list.
+  await page.locator("#registration-rows tr").nth(4).getByRole("button", { name: "查看／處理" }).click();
+  await expect(page.locator("#detail-title")).toHaveText("登記 #1｜陳弟兄");
+  await expect(children).toBeHidden();
+
+  await page.locator("#registration-rows tr").first().getByRole("button", { name: "查看／處理" }).click();
+  await expect(children.locator("strong")).toHaveText("這位家長的兒童");
+  await expect(children.locator("li")).toHaveText(["#3 王大明", "#4 王小明"]);
+  // While editing the names are plain text, so a click cannot drop unsaved changes.
+  await page.getByRole("button", { name: "修改登記資料" }).click();
+  await expect(children.locator("li")).toHaveText(["#3 王大明", "#4 王小明"]);
+  await expect(children.getByRole("button")).toHaveCount(0);
+  await page.getByRole("button", { name: "取消修改" }).click();
+
+  // Search conditions applied before the click give way to the child's serial number.
+  await page.locator("#search-form select").selectOption({ label: "中山" });
+  await page.locator("#search-form").getByLabel("兒童").check();
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "", district_id: 2, children_only: true });
+  await children.getByRole("button", { name: "#4 王小明" }).click();
+  await expect(page.locator("#detail-title")).toHaveText("登記 #4｜王小明");
+  expect(lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "4" });
+  await expect(page.locator('#search-form input[name="search"]')).toHaveValue("4");
+  await expect(page.locator("#search-form select")).toHaveValue("");
+  await expect(page.locator("#search-form").getByLabel("兒童")).not.toBeChecked();
+  await expect(page.locator("#registration-rows tr")).toHaveCount(1);
+  await expect(page.locator("#edit-registration-form").getByLabel("兒童")).toBeChecked();
+  await expect(children).toBeHidden();
+  // 清除條件 brings the full list back.
+  await page.getByRole("button", { name: "清除條件" }).click();
+  await expect(page.locator("#registration-rows tr")).toHaveCount(5);
 });
 
 test("a child's record shows the parent's name read-only and can be changed back to an adult", async ({ page }) => {

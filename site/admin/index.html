@@ -55,11 +55,12 @@
           <form id="search-form" class="staff-search inline-form">
             <label>姓名或流水號<input name="search" maxlength="100" /></label>
             <label>區<select name="district_id"><option value="">全部區</option></select></label>
+            <label class="check child-check"><input type="checkbox" name="children_only" />兒童</label>
             <button type="submit">搜尋</button>
             <button id="clear-search" type="button" class="secondary" disabled>清除條件</button>
           </form>
           <p id="registration-count"></p>
-          <p class="hint">親子：兒童顯示登記時填的家長姓名；同區有效登記中有這位家長時，家長那列顯示 ✓ 與兒童流水號。</p>
+          <p class="hint family-hint"><strong>親子：</strong>兒童顯示登記時填的家長姓名；同區有效登記中有這位家長時，家長那列顯示 ✓ 與兒童流水號（#），按「查看／處理」可看到兒童姓名。</p>
           <div class="table-scroll"><table id="registration-table"><thead><tr><th>流水號</th><th>姓名</th><th>區</th><th>狀態</th><th>匯入大會</th><th>更新時間</th><th>親子</th><th>操作</th></tr></thead><tbody id="registration-rows"></tbody></table></div>
           <div class="staff-actions pager"><button id="previous-page" type="button" class="secondary">上一頁</button><span id="page-number"></span><button id="next-page" type="button" class="secondary">下一頁</button></div>
         </section>
@@ -77,6 +78,7 @@
                   <label>區<select name="district_id" required></select></label>
                   <label class="check child-check"><input type="checkbox" name="is_child" />兒童</label>
                 </div>
+                <div id="detail-children" class="detail-children" hidden><strong>這位家長的兒童</strong><ul></ul></div>
                 <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
                 <fieldset class="hosting-panel"><legend>開家接待與接機接待</legend><div id="detail-hosting"></div><div id="detail-pickup"></div></fieldset>
               </div>

@@ -53,13 +53,14 @@ export function validChild(isChild, parentName) {
 }
 const parentNameMessage = "請填寫家長姓名（20 字以內）";
 
-// The 親子 column: the serial numbers of the active children naming each active, non-child row as
-// their parent (same district and name key). Children only ever show their own parent's name.
+// 親子: the active children ({ serial_no, full_name }) naming each active, non-child row as their
+// parent (same district and name key). Children only ever show their own parent's name.
 export function childrenByParent(rows, children) {
   for (const row of rows) {
     if (row.record_status !== "active" || row.is_child) continue;
     row.children = children.filter((child) => child.district_id === row.district_id
-      && child.parent_name_key === row.name_key).map((child) => child.serial_no);
+      && child.parent_name_key === row.name_key)
+      .map((child) => ({ serial_no: child.serial_no, full_name: child.full_name }));
   }
   return rows;
 }
@@ -189,6 +190,8 @@ export async function handler(request) {
       return response({ error: "INVALID_REQUEST" }, 400);
     }
     if (!validDistrictFilter(body.district_id)) return response({ error: "INVALID_REQUEST" }, 400);
+    // The 兒童 filter: left out lists everyone, true lists children only.
+    if (body.children_only !== undefined && body.children_only !== true) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
       .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,registration_choices(activity_id,attending),meal_identity,is_child,parent_name,name_key,registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)",
         beforeSerial === null ? { count: "exact" } : undefined)
@@ -203,6 +206,7 @@ export async function handler(request) {
         : query.ilike("name_key", `%${nameKey(body.search).replaceAll(/[%*,()]/g, "").replaceAll(/[\\_]/g, "\\$&")}%`);
     }
     if (body.district_id != null) query = query.eq("district_id", body.district_id);
+    if (body.children_only) query = query.eq("is_child", true);
     const { data, count, error } = await query;
     if (error) {
       console.error("Failed to list registrations", error);
@@ -216,6 +220,17 @@ export async function handler(request) {
       if (childrenError) {
         console.error("Failed to list registration children", childrenError);
         return response({ error: "名單載入失敗" }, 503);
+      }
+      // The lookup gives serial numbers only; the record view lists the children by name too.
+      if (children.length) {
+        const { data: names, error: namesError } = await database.from("registrations")
+          .select("serial_no,full_name").in("serial_no", children.map((child) => child.serial_no));
+        if (namesError) {
+          console.error("Failed to name registration children", namesError);
+          return response({ error: "名單載入失敗" }, 503);
+        }
+        const nameOf = new Map(names.map((item) => [item.serial_no, item.full_name]));
+        for (const child of children) child.full_name = nameOf.get(child.serial_no) ?? "";
       }
       childrenByParent(data, children);
     }

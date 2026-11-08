@@ -36,9 +36,11 @@ textarea { width: 100%; min-height: 6rem; padding: .65rem .75rem; border: 1px so
 .staff-form legend { margin-bottom: .25rem; font-weight: 600; }
 .inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; max-width: 40rem; }
 .inline-form > button { margin-top: 0; }
-#search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) auto auto; max-width: 52rem; }
+#search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) auto auto auto; max-width: 56rem; }
 /* A select renders a little shorter than an input; filling the row keeps both labels and boxes level. */
 #search-form label { align-self: stretch; grid-template-rows: auto 1fr; }
+/* 兒童 sits level with the boxes, like the checkbox right of 區 on the registration forms. */
+#search-form label.check { display: flex; align-self: end; }
 .staff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .staff-actions button { margin-top: 0; }
 .pager { justify-content: center; }
@@ -123,6 +125,14 @@ th { color: #59655f; background: #f6f9f7; font-size: .9rem; font-weight: 600; }
 tbody tr:hover { background: #f9fbfa; }
 /* 親子: a green check before the children's serial numbers on the parent's row. */
 .parent-check { color: #1f7a3f; font-weight: 700; }
+/* A parent's record lists the children naming them; each name opens that child's record. */
+.detail-children ul { margin: .35rem 0 0; padding: 0; list-style: none; }
+.detail-children li { margin: .2rem 0; }
+.link-button { width: auto; min-height: 0; margin: 0; padding: 0; border: 0; color: #23624b; background: none;
+  font-weight: 600; text-align: left; text-decoration: underline; cursor: pointer; }
+.link-button:hover, .link-button:focus-visible { color: #174634; background: none; }
+/* The 親子 note above the list stands out so staff read how the column works. */
+.family-hint { padding: .6rem .85rem; border-left: 4px solid #8a7d6e; border-radius: .5rem; color: #3d3832; background: #f3f1ee; }
 td button { min-height: 2rem; margin: 0 .4rem 0 0; padding: .25rem .8rem; color: #23624b; background: #fff; font-size: .9rem; }
 td button:hover { background: #e8f1ec; }
 table.numeric td:not(:first-child), table.numeric th:not(:first-child) { text-align: right; }

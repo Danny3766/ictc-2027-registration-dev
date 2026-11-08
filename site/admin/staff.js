@@ -14,6 +14,8 @@ let count = 0;
 let search = "";
 // The 區 filter's district id as the select gives it; "" means every district.
 let district = "";
+// The 兒童 filter: true lists children only.
+let childOnly = false;
 let visibleRegistrations = [];
 let selectedRegistration;
 let editingRegistration = false;
@@ -147,7 +149,7 @@ function clearSession() {
   document.querySelector("#new-registration-form").reset();
   // The list's conditions belong to this login too.
   document.querySelector("#search-form").reset();
-  [page, search, district] = [0, "", ""];
+  [page, search, district, childOnly] = [0, "", "", false];
   document.querySelector("#clear-search").disabled = true;
   for (const selector of ["#registration-rows", "#staff-rows"]) {
     document.querySelector(selector).replaceChildren();
@@ -470,7 +472,8 @@ async function saveReference(event, kind) {
 }
 
 async function loadRegistrations() {
-  const result = await api("list_registrations", { page, search, ...(district && { district_id: Number(district) }) });
+  const result = await api("list_registrations", { page, search, ...(district && { district_id: Number(district) }),
+    ...(childOnly && { children_only: true }) });
   count = result.count ?? 0;
   document.querySelector("#registration-count").textContent = `共 ${count} 筆`;
   document.querySelector("#page-number").textContent = `第 ${page + 1} 頁`;
@@ -495,7 +498,7 @@ async function loadRegistrations() {
       const check = document.createElement("span");
       check.className = "parent-check";
       check.textContent = "✓";
-      family.append(check, ` ${registration.children.join("、")}`);
+      family.append(check, ` ${registration.children.map((child) => `#${child.serial_no}`).join(" ")}`);
     }
     const actions = cell(row, "");
     const edit = document.createElement("button");
@@ -877,6 +880,8 @@ function openRegistration(registration, editing = false) {
   // The fieldset disables every hosting control, whatever its tag; sync() cannot re-enable them.
   // For a child it is hidden and disabled, as the surveys are not asked.
   syncChildFields(form, editingRegistration);
+  // Rendered after the loop above, which disables every button in view mode.
+  showParentChildren(registration);
   // In view mode sync() does not run, so show the stored identity whenever the choices need one.
   const identity = document.querySelector("#detail-choices .meal-identity");
   if (identity) identity.hidden = !Meals.needsIdentity(currentActivities(), registration.registration_choices);
@@ -885,6 +890,41 @@ function openRegistration(registration, editing = false) {
   voidForm.reset();
   voidForm.querySelectorAll("input, button").forEach((control) => control.disabled = registration.record_status === "void");
   if (switching) detail.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// A parent's record lists the children naming them. While viewing, a name opens that child's record;
+// while editing it is plain text, so a click cannot drop unsaved changes.
+function showParentChildren(registration) {
+  const block = document.querySelector("#detail-children");
+  const children = registration.children ?? [];
+  block.hidden = !children.length;
+  block.querySelector("ul").replaceChildren(...children.map((child) => {
+    const item = document.createElement("li");
+    const label = `#${child.serial_no} ${child.full_name}`;
+    if (editingRegistration) item.textContent = label;
+    else {
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "link-button";
+      open.textContent = label;
+      open.addEventListener("click", () => openChildRegistration(child.serial_no));
+      item.append(open);
+    }
+    return item;
+  }));
+}
+
+// The list switches to a search for the child's serial number, so the record stays open after a save;
+// 清除條件 brings the full list back.
+async function openChildRegistration(serial) {
+  if (!await showRegistrations(0, String(serial), "", false)) return;
+  searchForm.elements.search.value = String(serial);
+  searchForm.elements.district_id.value = "";
+  searchForm.elements.children_only.checked = false;
+  updateClearSearch();
+  const child = visibleRegistrations.find((item) => item.serial_no === serial);
+  if (child) openRegistration(child);
+  else showMessage("找不到這位兒童的有效登記，請重新整理名單。", true);
 }
 
 async function refreshRegistration() {
@@ -1218,15 +1258,15 @@ document.querySelector("#close-staff-editor").addEventListener("click", () => {
 });
 
 // A failed load keeps the previous page and conditions, so the controls match the rows on screen.
-async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district) {
-  const previous = [page, search, district];
-  [page, search, district] = [nextPage, nextSearch, nextDistrict];
+async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district, nextChildOnly = childOnly) {
+  const previous = [page, search, district, childOnly];
+  [page, search, district, childOnly] = [nextPage, nextSearch, nextDistrict, nextChildOnly];
   try {
     await loadRegistrations();
     return true;
   } catch (error) {
     // A 401 has already logged out and cleared the conditions; restoring them would hand them to the next login.
-    if (session) [page, search, district] = previous;
+    if (session) [page, search, district, childOnly] = previous;
     showMessage(error.message, true);
     return false;
   } finally {
@@ -1236,20 +1276,24 @@ async function showRegistrations(nextPage, nextSearch = search, nextDistrict = d
 const searchForm = document.querySelector("#search-form");
 // Enabled while either the typed or the applied conditions are set, so a filter typed away but still on the list can be cleared.
 function updateClearSearch() {
-  document.querySelector("#clear-search").disabled = !search && !district
-    && !searchForm.elements.search.value.trim() && !searchForm.elements.district_id.value;
+  document.querySelector("#clear-search").disabled = !search && !district && !childOnly
+    && !searchForm.elements.search.value.trim() && !searchForm.elements.district_id.value
+    && !searchForm.elements.children_only.checked;
 }
 searchForm.addEventListener("input", updateClearSearch);
 searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
-  showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value);
+  showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value,
+    searchForm.elements.children_only.checked);
 });
 document.querySelector("#clear-search").addEventListener("click", async () => {
-  const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value];
+  const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value,
+    searchForm.elements.children_only.checked];
   searchForm.reset();
   // A failed load keeps the conditions from before the click, in the fields as well as on the list.
-  if (!await showRegistrations(0, "", "") && session) {
-    [searchForm.elements.search.value, searchForm.elements.district_id.value] = entered;
+  if (!await showRegistrations(0, "", "", false) && session) {
+    [searchForm.elements.search.value, searchForm.elements.district_id.value,
+      searchForm.elements.children_only.checked] = entered;
     updateClearSearch();
   }
 });

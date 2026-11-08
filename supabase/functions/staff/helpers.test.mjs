@@ -69,10 +69,12 @@ test("親子 lists each active adult's active children in the same district; chi
     { serial_no: 4, district_id: 1, name_key: "王大明", record_status: "void", is_child: false },
   ];
   const children = [
-    { district_id: 1, parent_name_key: "王爸爸", serial_no: 3 },
-    { district_id: 1, parent_name_key: "王爸爸", serial_no: 5 },
-    { district_id: 1, parent_name_key: "王大明", serial_no: 6 },
+    { district_id: 1, parent_name_key: "王爸爸", serial_no: 3, full_name: "王大明" },
+    { district_id: 1, parent_name_key: "王爸爸", serial_no: 5, full_name: "王小明" },
+    { district_id: 1, parent_name_key: "王大明", serial_no: 6, full_name: "王小華" },
   ];
   childrenByParent(rows, children);
-  assert.deepEqual(rows.map((row) => row.children), [[3, 5], [], undefined, undefined]);
+  assert.deepEqual(rows.map((row) => row.children), [
+    [{ serial_no: 3, full_name: "王大明" }, { serial_no: 5, full_name: "王小明" }], [], undefined, undefined,
+  ]);
 });
