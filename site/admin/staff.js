@@ -454,7 +454,7 @@ async function saveReference(event, kind) {
     let outside;
     try {
       outside = activeRegistrations(await allRegistrations()).filter((registration) => attends(registration, edited)
-        && !Meals.eligible(data, { hostingStatus: hostingOf(registration)?.status,
+        && !Meals.eligible(data, { isChild: registration.is_child, hostingStatus: hostingOf(registration)?.status,
           pickupStatus: pickupOf(registration)?.status, choices: registration.registration_choices,
           activities: reference.activities })).length;
     } catch (error) { return showMessage(error.message, true); }
@@ -488,6 +488,15 @@ async function loadRegistrations() {
     statusCell(row, "record", registration.record_status);
     statusCell(row, "import", registration.import_status);
     cell(row, shortTime(registration.updated_at));
+    // 親子: a child shows the parent's name as entered; a parent found in the list shows ✓ and the
+    // children's serial numbers (the hint above the table says so for other staff).
+    const family = cell(row, registration.is_child ? registration.parent_name : "");
+    if (registration.children?.length) {
+      const check = document.createElement("span");
+      check.className = "parent-check";
+      check.textContent = "✓";
+      family.append(check, ` ${registration.children.join("、")}`);
+    }
     const actions = cell(row, "");
     const edit = document.createElement("button");
     edit.type = "button";
@@ -546,7 +555,7 @@ async function showStatistics() {
       total.subsidy += cost - fee;
     }
     const restricted = attendees.filter((registration) => !Meals.eligible(activity, {
-      hostingStatus: hostingOf(registration)?.status, pickupStatus: pickupOf(registration)?.status,
+      isChild: registration.is_child, hostingStatus: hostingOf(registration)?.status, pickupStatus: pickupOf(registration)?.status,
       choices: registration.registration_choices, activities: reference.activities,
     })).length;
     if (restricted) outside.push(`${activity.title} ${restricted} 人`);
@@ -572,20 +581,22 @@ async function showStatistics() {
   ].join("");
   const districtRows = document.querySelector("#district-stats-rows");
   districtRows.replaceChildren();
-  const districtTotal = { people: 0, fee: 0 };
+  const districtTotal = { people: 0, children: 0, fee: 0 };
   // A 全會所 card, then one per district; no 合計 row, since adding activities would count a person twice.
   const districtCards = [districtActivityCard({ name: "全會所" }, registrations, activities)];
   for (const district of reference.districts) {
     const people = registrations.filter((item) => item.district_id === district.id);
     const fee = people.reduce((sum, person) => sum + mealFee(person, activities), 0);
+    const children = people.filter((person) => person.is_child).length;
     districtTotal.people += people.length;
+    districtTotal.children += children;
     districtTotal.fee += fee;
     const row = document.createElement("tr");
-    for (const value of [district.name, people.length, `NT$${fee}`]) cell(row, value);
+    for (const value of [district.name, people.length, children, `NT$${fee}`]) cell(row, value);
     districtRows.append(row);
     districtCards.push(districtActivityCard(district, people, activities));
   }
-  totalRow(districtRows, [districtTotal.people, `NT$${districtTotal.fee}`]);
+  totalRow(districtRows, [districtTotal.people, districtTotal.children, `NT$${districtTotal.fee}`]);
   document.querySelector("#district-activity-cards").replaceChildren(...districtCards);
   showHostingStatistics(registrations);
 }
@@ -705,7 +716,7 @@ async function downloadStatisticsCsv() {
 async function downloadCsv() {
   const activities = currentActivities();
   const districts = new Map(reference.districts.map((item) => [item.id, item.name]));
-  const rows = [["流水號", "姓名", "區", "匯入狀態", ...activities.map((item) => item.title),
+  const rows = [["流水號", "姓名", "區", "兒童", "家長姓名", "匯入狀態", ...activities.map((item) => item.title),
     "開家接待", "接待對象", "可接待人數", "是否可以接機", "可接機人數", "用餐身分", "預估應付餐費"]];
   for (const registration of activeRegistrations(await allRegistrations())) {
     const choices = new Map(registration.registration_choices.map((item) => [item.activity_id, item.attending]));
@@ -713,6 +724,7 @@ async function downloadCsv() {
     const pickup = pickupOf(registration);
     rows.push([
       registration.serial_no, registration.full_name, districts.get(registration.district_id),
+      registration.is_child ? "是" : "", registration.parent_name ?? "",
       label("import", registration.import_status),
       ...activities.map((item) => !choices.has(item.id) ? "未回覆" : choices.get(item.id) ? "參加" : "不參加"),
       hosting ? Hosting.statusLabels[hosting.status] : "未回覆",
@@ -757,10 +769,30 @@ function renderChoiceFields(container, choices = new Map(), requireAll = true, i
   Meals.render(container, currentActivities(), identity);
 }
 
+// 兒童 (same rules as the public form): the surveys are not asked, since both are stored as 否, and the
+// parent's name is required at the bottom. editable is false while a record is only being viewed.
+function syncChildFields(form, editable = true) {
+  const child = form.elements.is_child.checked;
+  form.querySelector(".child-hint").hidden = !(child && editable);
+  form.querySelector(".parent-name").hidden = !child;
+  form.elements.parent_name.disabled = !child || !editable;
+  const panel = form.querySelector(".hosting-panel");
+  panel.hidden = child;
+  panel.disabled = child || !editable;
+}
+// The parent's name to send: trimmed for a child, nothing otherwise; throws when a child has none.
+function parentNameFrom(form) {
+  if (!form.elements.is_child.checked) return null;
+  const name = form.elements.parent_name.value.trim();
+  if (!name) throw new Error("請填寫家長姓名");
+  return name;
+}
+
 // Staff follow the same audience and identity rules as the public form.
 const checkedStatus = (selector) => document.querySelector(`${selector} [name="hosting_status"]:checked`)?.value ?? null;
 function syncNewMeals() {
   Meals.sync(document.querySelector("#new-registration-choices"), currentActivities(), {
+    isChild: document.querySelector("#new-registration-form").elements.is_child.checked,
     hostingStatus: checkedStatus("#new-registration-hosting"),
     pickupStatus: Pickup.read(document.querySelector("#new-registration-pickup"))?.status,
   });
@@ -769,6 +801,7 @@ function syncDetailMeals() {
   // Only while editing: sync would re-enable allowed choices and show what saving would change.
   if (!editingRegistration) return;
   Meals.sync(document.querySelector("#detail-choices"), currentActivities(), {
+    isChild: document.querySelector("#edit-registration-form").elements.is_child.checked,
     hostingStatus: checkedStatus("#detail-hosting"),
     pickupStatus: Pickup.read(document.querySelector("#detail-pickup"))?.status,
   });
@@ -796,6 +829,7 @@ function renderNewRegistrationForm() {
   Hosting.render(hosting, Hosting.read(hosting), Boolean(reference.settings.is_hosting_open));
   const pickup = document.querySelector("#new-registration-pickup");
   Pickup.render(pickup, Pickup.read(pickup), Boolean(reference.settings.is_pickup_open));
+  syncChildFields(form);
   syncNewMeals();
 }
 
@@ -815,6 +849,8 @@ function openRegistration(registration, editing = false) {
   document.querySelector("#detail-title").textContent = `登記 #${registration.serial_no}｜${registration.full_name}`;
   const form = document.querySelector("#edit-registration-form");
   form.elements.full_name.value = registration.full_name;
+  form.elements.is_child.checked = Boolean(registration.is_child);
+  form.elements.parent_name.value = registration.parent_name ?? "";
   const districts = form.elements.district_id;
   districts.replaceChildren();
   for (const district of reference.districts) {
@@ -839,7 +875,8 @@ function openRegistration(registration, editing = false) {
   Hosting.render(hostingFields, hosting, hosting !== null);
   Pickup.render(document.querySelector("#detail-pickup"), pickupOf(registration), pickupOf(registration) !== null);
   // The fieldset disables every hosting control, whatever its tag; sync() cannot re-enable them.
-  hostingFields.closest("fieldset").disabled = !editingRegistration;
+  // For a child it is hidden and disabled, as the surveys are not asked.
+  syncChildFields(form, editingRegistration);
   // In view mode sync() does not run, so show the stored identity whenever the choices need one.
   const identity = document.querySelector("#detail-choices .meal-identity");
   if (identity) identity.hidden = !Meals.needsIdentity(currentActivities(), registration.registration_choices);
@@ -1227,16 +1264,20 @@ document.querySelector("#edit-registration-form").addEventListener("submit", asy
   const form = event.currentTarget;
   const data = new FormData(form);
   const choices = choicesFromForm(form);
+  let parentName;
+  try { parentName = parentNameFrom(form); } catch (error) { return showMessage(error.message, true); }
   // Saving applies the audience rule to sign-ups from before an activity was restricted.
   const reverted = Meals.revertedCount(document.querySelector("#detail-choices"));
   if (reverted && !confirm(`這筆登記有 ${reverted} 項限定活動不符報名對象，儲存後會改為不參加。確定儲存？`)) return;
+  const child = parentName !== null;
   try {
     await api("save_registration", {
       registration_id: selectedRegistration.id, full_name: data.get("full_name"),
       district_id: Number(data.get("district_id")), choices,
-      hosting: Hosting.read(document.querySelector("#detail-hosting")),
-      pickup: Pickup.read(document.querySelector("#detail-pickup")),
+      hosting: child ? null : Hosting.read(document.querySelector("#detail-hosting")),
+      pickup: child ? null : Pickup.read(document.querySelector("#detail-pickup")),
       meal_identity: Meals.readIdentity(document.querySelector("#detail-choices")),
+      is_child: child, parent_name: parentName ?? undefined,
     });
     await refreshRegistration();
     // Back in view mode the save button is hidden; focus the way back into editing.
@@ -1246,11 +1287,15 @@ document.querySelector("#edit-registration-form").addEventListener("submit", asy
 });
 // Same form content keeps the same id, so a double submit or network retry cannot create a second record.
 let newRegistrationRequestId = crypto.randomUUID();
-document.querySelector("#new-registration-form").addEventListener("input", () => {
+document.querySelector("#new-registration-form").addEventListener("input", (event) => {
   newRegistrationRequestId = crypto.randomUUID();
+  syncChildFields(event.currentTarget);
   syncNewMeals();
 });
-document.querySelector("#edit-registration-form").addEventListener("input", syncDetailMeals);
+document.querySelector("#edit-registration-form").addEventListener("input", (event) => {
+  if (editingRegistration) syncChildFields(event.currentTarget);
+  syncDetailMeals();
+});
 // Each button hides itself, so focus moves to where the person continues instead of falling to the page.
 document.querySelector("#start-registration-edit").addEventListener("click", () => {
   openRegistration(selectedRegistration, true);
@@ -1268,13 +1313,16 @@ document.querySelector("#new-registration-form").addEventListener("submit", asyn
   submit.disabled = true;
   const data = new FormData(form);
   try {
+    const parentName = parentNameFrom(form);
+    const child = parentName !== null;
     const result = await api("create_registration", {
       create_request_id: newRegistrationRequestId,
       full_name: data.get("full_name"), district_id: Number(data.get("district_id")),
       choices: choicesFromForm(form),
-      hosting: Hosting.read(document.querySelector("#new-registration-hosting")),
-      pickup: Pickup.read(document.querySelector("#new-registration-pickup")),
+      hosting: child ? null : Hosting.read(document.querySelector("#new-registration-hosting")),
+      pickup: child ? null : Pickup.read(document.querySelector("#new-registration-pickup")),
       meal_identity: Meals.readIdentity(document.querySelector("#new-registration-choices")),
+      is_child: child, parent_name: parentName ?? undefined,
     });
     newRegistrationRequestId = crypto.randomUUID();
     const notice = document.querySelector("#new-registration-code");

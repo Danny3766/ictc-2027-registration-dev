@@ -7,7 +7,8 @@ if (window.APP_CONFIG?.environment === "test") Object.assign(document.querySelec
 if (!data?.full_name) {
   location.replace("./index.html");
 } else {
-  document.querySelector("#summary-identity").textContent = `${data.full_name}｜${data.district}`;
+  document.querySelector("#summary-identity").textContent = `${data.full_name}｜${data.district}`
+    + (data.parent_name ? `｜兒童（家長：${data.parent_name}）` : "");
   document.querySelector("#summary-choices").replaceChildren(...data.choices.map((choice) => {
     const item = document.createElement("li");
     item.textContent = `${choice.title}：${choice.attending ? "參加" : "不參加"}`;

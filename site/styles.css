@@ -24,6 +24,11 @@ h1, h2 { line-height: 1.25; }
 .tabs button[aria-selected="true"] { background: #23624b; color: #fff; }
 label, fieldset { display: block; margin: 1rem 0; }
 .identity-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+/* 兒童 sits right of 區 on wide screens and takes its own row on phones, level with the boxes. */
+.child-check { grid-column: 1 / -1; display: flex; align-items: center; gap: .4rem; align-self: end; min-height: 2.75rem; margin-top: 0; }
+.child-check input { width: auto; min-height: auto; margin: 0; }
+.child-hint { margin-top: 0; }
+input[readonly] { background: #eef3f0; }
 input, select, textarea, button { width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .65rem .75rem; border: 1px solid #9caaa3; border-radius: .5rem; font: inherit; }
 button, .button-link { border-color: #23624b; color: #fff; background: #23624b; font-weight: 700; cursor: pointer; }
 button:disabled { opacity: .55; cursor: wait; }
@@ -69,6 +74,8 @@ fieldset { padding: 0; border: 0; }
 .button-link { display: block; margin-top: 1rem; padding: .7rem; border-radius: .5rem; text-align: center; text-decoration: none; }
 
 @media (min-width: 42rem) {
+  .identity-fields.with-child { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+  .child-check { grid-column: auto; }
   .program-calendar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .program-slot { grid-template-columns: 1fr; gap: .1rem; }
 }

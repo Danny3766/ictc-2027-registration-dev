@@ -11,8 +11,9 @@ const Meals = (() => {
   const eligible = (activity, context = {}) => {
     const audience = activity.audience ?? "all";
     if (audience === "all") return true;
-    if (audience === "hosting") return hostingStatuses.includes(context.hostingStatus);
-    if (audience === "pickup") return context.pickupStatus === "yes";
+    // 兒童 answer neither survey and are outside both audiences (decided 2026-11-09).
+    if (audience === "hosting") return Boolean(context.isChild) || hostingStatuses.includes(context.hostingStatus);
+    if (audience === "pickup") return Boolean(context.isChild) || context.pickupStatus === "yes";
     if (!audience.startsWith("activity:")) return false;
     const requiredId = Number(audience.slice(9));
     const prerequisite = context.activities?.find((item) => item.id === requiredId);

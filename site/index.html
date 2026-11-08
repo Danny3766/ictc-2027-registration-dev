@@ -45,7 +45,7 @@
         <div id="register-panel" role="tabpanel" aria-labelledby="register-tab">
         <!-- autocomplete="off" on the names: browsers otherwise refill the previous person's name after a reload or 上一頁 on a shared device. -->
         <form id="registration-form">
-          <div class="identity-fields">
+          <div class="identity-fields with-child">
             <label
               >姓名<input
                 name="full_name"
@@ -58,7 +58,9 @@
                 <option value="">請選擇</option>
               </select></label
             >
+            <label class="child-check"><input type="checkbox" name="is_child" />兒童</label>
           </div>
+          <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
           <fieldset id="hosting-section" class="hosting-section" hidden>
             <legend>開家接待</legend>
             <div class="hosting-survey">
@@ -77,6 +79,7 @@
             <p class="hint">請為每項活動選擇參加或不參加，報名截止前都可以修改登記</p>
             <div id="activities"></div>
           </fieldset>
+          <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required disabled /></label>
           <label class="honeypot" aria-hidden="true"
             >網站<input name="website" tabindex="-1" autocomplete="off"
           /></label>
@@ -95,7 +98,12 @@
           <button type="submit">查詢</button>
         </form>
         <form id="edit-form" hidden>
-          <p id="edit-identity" class="notice"></p>
+          <div class="identity-fields with-child">
+            <label>姓名<input id="edit-full-name" readonly /></label>
+            <label>區<input id="edit-district" readonly /></label>
+            <label class="child-check"><input type="checkbox" name="is_child" disabled />兒童</label>
+          </div>
+          <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
           <p class="hint">姓名或區需要更正時，請聯絡服事者。</p>
           <p id="edit-mode-hint" class="hint" hidden>正在修改登記內容。</p>
           <fieldset id="edit-hosting-section" class="hosting-section" hidden>
@@ -112,6 +120,7 @@
             <legend>活動選擇</legend>
             <div id="edit-activities"></div>
           </fieldset>
+          <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required readonly /></label>
           <div class="actions">
             <button id="start-edit" type="button">修改登記內容</button>
             <button id="save-edit" type="submit" hidden disabled>儲存修改</button>

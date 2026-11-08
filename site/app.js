@@ -14,6 +14,8 @@ const pickupFields = document.querySelector("#pickup-fields");
 const editHostingSection = document.querySelector("#edit-hosting-section");
 const editHosting = document.querySelector("#edit-hosting");
 const editPickup = document.querySelector("#edit-pickup");
+const editChildInput = editForm.elements.is_child;
+const editParentInput = editForm.elements.parent_name;
 const hostingClosedMessage = "開家接待調查已關閉，如需調整請聯絡服事者";
 const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
 const startedAt = Date.now();
@@ -24,6 +26,8 @@ let queriedChoicesBaseline = null;
 let queriedHostingBaseline = null;
 let queriedPickupBaseline = null;
 let queriedIdentityBaseline = null;
+// { is_child, parent_name } as saved; parent_name is null for anyone not a child.
+let queriedChildBaseline = null;
 // The edit form as it first appears. Opening it can already turn a restricted activity signed up
 // before the restriction into 不參加 (and so hide the identity question); that alone is not an edit
 // to warn about, and it is saved only together with a change the person makes.
@@ -196,6 +200,37 @@ function currentEditChoices() {
 
 const hostingOpen = () => Boolean(pageData?.settings.is_hosting_open);
 const pickupOpen = () => Boolean(pageData?.settings.is_pickup_open);
+const registrationChild = () => registrationForm.elements.is_child.checked;
+// While editing, the checkbox and the name as entered; otherwise the saved values.
+function currentEditChild() {
+  if (!editMode) return queriedChildBaseline;
+  return { is_child: editChildInput.checked, parent_name: editChildInput.checked ? editParentInput.value.trim() : null };
+}
+const editingChild = () => Boolean(currentEditChild()?.is_child);
+
+// 兒童 answer neither survey (both are stored as 否) and give a parent's name at the bottom of the form.
+function showRegistrationChild() {
+  const child = registrationChild();
+  registrationForm.querySelector(".child-hint").hidden = !child;
+  registrationForm.querySelector(".parent-name").hidden = !child;
+  registrationForm.elements.parent_name.disabled = !child;
+  hostingSection.hidden = child || (!hostingOpen() && !pickupOpen());
+  hostingSection.disabled = child;
+}
+
+// The lookup shows the saved child fields read-only until 修改登記內容.
+function showEditChild() {
+  if (!editMode) {
+    editChildInput.checked = Boolean(queriedChildBaseline?.is_child);
+    editParentInput.value = queriedChildBaseline?.parent_name ?? "";
+  }
+  const child = editingChild();
+  editChildInput.disabled = !editMode;
+  editForm.querySelector(".child-hint").hidden = !(editMode && child);
+  editForm.querySelector(".parent-name").hidden = !child;
+  editParentInput.readOnly = !editMode;
+  editParentInput.disabled = !child;
+}
 
 const currentEditIdentity = () => editMode ? Meals.readIdentity(editActivities) : queriedIdentityBaseline;
 const checkedHostingStatus = (container) => container.querySelector('[name="hosting_status"]:checked')?.value ?? null;
@@ -203,11 +238,13 @@ const checkedHostingStatus = (container) => container.querySelector('[name="host
 // Restricted activities follow the current hosting, pickup and activity answers.
 function syncMeals() {
   Meals.sync(registrationForm, pageData.activities, {
+    isChild: registrationChild(),
     hostingStatus: hostingOpen() ? checkedHostingStatus(hostingFields) : null,
     pickupStatus: pickupOpen() ? Pickup.read(pickupFields)?.status : null,
   });
   if (editMode) {
     Meals.sync(editActivities, pageData.activities, {
+      isChild: editingChild(),
       hostingStatus: hostingOpen() ? checkedHostingStatus(editHosting) : queriedHostingBaseline?.status ?? null,
       pickupStatus: currentEditPickup()?.status ?? null,
     });
@@ -215,11 +252,12 @@ function syncMeals() {
 }
 
 // Only an open hosting survey is editable by the registrant; otherwise the stored answer stands.
+// A child's answers are not asked; the server stores 否 for both.
 function currentEditHosting() {
-  return editMode && hostingOpen() ? Hosting.read(editHosting) : queriedHostingBaseline;
+  return editMode && hostingOpen() && !editingChild() ? Hosting.read(editHosting) : queriedHostingBaseline;
 }
 function currentEditPickup() {
-  return editMode && pickupOpen() ? Pickup.read(editPickup) : queriedPickupBaseline;
+  return editMode && pickupOpen() && !editingChild() ? Pickup.read(editPickup) : queriedPickupBaseline;
 }
 
 function hasUnsavedChanges() {
@@ -227,6 +265,7 @@ function hasUnsavedChanges() {
     && (JSON.stringify(currentEditChoices()) !== JSON.stringify(editStartChoices)
       || JSON.stringify(currentEditHosting()) !== JSON.stringify(queriedHostingBaseline)
       || JSON.stringify(currentEditPickup()) !== JSON.stringify(queriedPickupBaseline)
+      || JSON.stringify(currentEditChild()) !== JSON.stringify(queriedChildBaseline)
       || currentEditIdentity() !== editStartIdentity));
 }
 
@@ -252,7 +291,7 @@ function showHostingDescriptions() {
 // descriptions (see showHostingDescriptions).
 function showRegistrationHosting() {
   showHostingDescriptions();
-  hostingSection.hidden = !hostingOpen() && !pickupOpen();
+  showRegistrationChild();
   hostingSection.querySelector("legend").textContent = hostingOpen() ? "開家接待" : "接機接待";
   hostingSection.querySelector(".hosting-survey").hidden = !hostingOpen();
   const pickupSurvey = hostingSection.querySelector(".pickup-survey");
@@ -305,7 +344,9 @@ function applyHostingChange(error) {
 
 // While hosting is closed an existing answer stays visible but read-only; without one the section stays hidden.
 function showHostingSummary() {
-  editHostingSection.hidden = !hostingOpen() && !pickupOpen() && !queriedHostingBaseline && !queriedPickupBaseline;
+  editHostingSection.hidden = editingChild()
+    || (!hostingOpen() && !pickupOpen() && !queriedHostingBaseline && !queriedPickupBaseline);
+  editHostingSection.disabled = editingChild();
   editHostingSection.querySelector("legend").textContent = hostingOpen() || queriedHostingBaseline
     ? "開家接待" : "接機接待";
   const editPickupSurvey = document.querySelector("#edit-pickup-survey");
@@ -331,6 +372,7 @@ function showConfirmation() {
     editActivities.insertAdjacentHTML("beforeend", `<div class="activity"><strong>用餐身分</strong>
       <p class="activity-status">登記狀態：${escapeHtml(Meals.identityLabels[queriedIdentityBaseline])}</p></div>`);
   }
+  showEditChild();
   showHostingSummary();
   showHostingDescriptions();
   editModeHint.hidden = true;
@@ -343,6 +385,7 @@ function showConfirmation() {
 function beginEditing() {
   if (!queriedCanChange || !queriedChoicesBaseline) return;
   editMode = true;
+  showEditChild();
   editActivities.innerHTML = activityFields(pageData.activities, choicesMap(queriedChoicesBaseline), false);
   Meals.render(editActivities, pageData.activities, queriedIdentityBaseline);
   if (hostingOpen()) Hosting.render(editHosting, queriedHostingBaseline);
@@ -425,9 +468,12 @@ registrationForm.addEventListener("submit", async (event) => {
   setBusy(registrationForm, true);
   try {
     const data = new FormData(registrationForm);
+    const child = registrationChild();
+    const parentName = child ? String(data.get("parent_name") ?? "").trim() : null;
+    if (child && !parentName) throw new Error("請填寫家長姓名");
     const choices = choicesFrom(registrationForm);
-    const hosting = hostingOpen() ? Hosting.read(hostingFields) : undefined;
-    const pickup = pickupOpen() ? Pickup.read(pickupFields) : undefined;
+    const hosting = hostingOpen() && !child ? Hosting.read(hostingFields) : undefined;
+    const pickup = pickupOpen() && !child ? Pickup.read(pickupFields) : undefined;
     const mealIdentity = Meals.readIdentity(registrationForm);
     await api({
       action: "create",
@@ -441,12 +487,15 @@ registrationForm.addEventListener("submit", async (event) => {
       pickup,
       // Sent only when asked; the server treats a missing identity as no answer.
       meal_identity: mealIdentity ?? undefined,
+      is_child: child,
+      parent_name: parentName ?? undefined,
       turnstile_token: null,
     });
     // The success page shows what was sent, so the person can check it before leaving.
     sessionStorage.setItem("registration_success", JSON.stringify({
       full_name: String(data.get("full_name")).trim(),
       district: districtName(data.get("district_id")),
+      parent_name: parentName,
       choices: choices.map((choice) => ({
         title: pageData.activities.find((activity) => activity.id === choice.activity_id)?.title ?? "",
         attending: choice.attending,
@@ -474,13 +523,17 @@ queryForm.addEventListener("submit", async (event) => {
   queriedHostingBaseline = null;
   queriedPickupBaseline = null;
   queriedIdentityBaseline = null;
+  queriedChildBaseline = null;
   queriedCanChange = false;
   editMode = false;
   try {
     const data = new FormData(queryForm);
     const identity = { full_name: String(data.get("full_name")).trim(), district_id: Number(data.get("district_id")) };
     const registration = await api({ action: "query", ...identity });
-    document.querySelector("#edit-identity").textContent = `${registration.full_name}｜${districtName(registration.district_id)}`;
+    document.querySelector("#edit-full-name").value = registration.full_name;
+    document.querySelector("#edit-district").value = districtName(registration.district_id);
+    queriedChildBaseline = { is_child: registration.is_child === true,
+      parent_name: registration.is_child === true ? registration.parent_name ?? null : null };
     activeIdentity = identity;
     queriedChoicesBaseline = sortedChoices(registration.choices);
     queriedHostingBaseline = Hosting.normalize(registration.hosting);
@@ -510,6 +563,8 @@ editForm.addEventListener("submit", async (event) => {
   if (!editMode) return;
   const choices = currentEditChoices();
   if (choices.some((choice) => choice.attending === null)) return showMessage("請回答每一項活動", true);
+  const child = currentEditChild();
+  if (child.is_child && !child.parent_name) return showMessage("請填寫家長姓名", true);
   if (!editForm.reportValidity() || !hasUnsavedChanges()) return;
   const hosting = currentEditHosting();
   const pickup = currentEditPickup();
@@ -517,10 +572,13 @@ editForm.addEventListener("submit", async (event) => {
   setBusy(editForm, true);
   try {
     await api({ action: "update", ...activeIdentity, choices, meal_identity: mealIdentity ?? undefined,
-      ...(hostingOpen() ? { hosting } : {}), ...(pickupOpen() ? { pickup } : {}) });
+      ...child, ...(hostingOpen() && !child.is_child ? { hosting } : {}),
+      ...(pickupOpen() && !child.is_child ? { pickup } : {}) });
     queriedChoicesBaseline = choices;
-    queriedHostingBaseline = hosting;
-    queriedPickupBaseline = pickup;
+    // The server stored 否 for a child's surveys; an adult's stand as sent.
+    queriedHostingBaseline = child.is_child ? Hosting.normalize({ status: "not_hosting" }) : hosting;
+    queriedPickupBaseline = child.is_child ? Pickup.normalize({ status: "no", count: 0 }) : pickup;
+    queriedChildBaseline = child;
     queriedIdentityBaseline = mealIdentity;
     showConfirmation();
     showMessage("修改已儲存，以下為目前登記內容。");
@@ -538,9 +596,14 @@ editForm.addEventListener("submit", async (event) => {
 });
 
 startEditButton.addEventListener("click", beginEditing);
-registrationForm.addEventListener("input", syncMeals);
+registrationForm.addEventListener("input", () => {
+  showRegistrationChild();
+  syncMeals();
+});
 editForm.addEventListener("input", () => {
   if (!editMode) return;
+  showEditChild();
+  showHostingSummary();
   syncMeals();
   updateSaveState();
 });
@@ -555,6 +618,7 @@ cancelEditButton.addEventListener("click", () => {
 window.addEventListener("pageshow", (event) => {
   if (!event.persisted) return;
   registrationForm.elements.full_name.value = "";
+  registrationForm.elements.parent_name.value = "";
   queryForm.elements.full_name.value = "";
 });
 

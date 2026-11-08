@@ -499,7 +499,7 @@ test("statistics show one card per district, with its activities and a district 
   // A district nobody has signed up from still shows, with zeros.
   await expect(cards.nth(2).locator("h3")).toHaveText("測試二區 有效登記 0 人");
   await expect(cards.nth(2).locator("tbody tr").nth(0).locator("td")).toHaveText(["測試聚會", "0", "0", "0"]);
-  await expect(page.locator("#district-stats-rows tr.total td")).toHaveText(["合計", "2", "NT$0"]);
+  await expect(page.locator("#district-stats-rows tr.total td")).toHaveText(["合計", "2", "0", "NT$0"]);
 });
 
 test("voiding a registration requires a reason and sends it", async ({ page }) => {
@@ -1084,7 +1084,7 @@ test("statistics CSV includes the visible sections and omits the family hosting 
   expect(csv).toContain('"統計摘要"\r\n"有效登記 4 筆');
   expect(csv).toContain('"各活動"\r\n"活動","參加","其中學生","不參加","未回覆"');
   expect(csv).toContain('"測試聚會","2","—","2","0","NT$0","—","—"');
-  expect(csv).toContain('"各區"\r\n"區","有效登記","預估費用"\r\n"林森","4","NT$0"\r\n"合計","4","NT$0"');
+  expect(csv).toContain('"各區"\r\n"區","有效登記","其中兒童","預估費用"\r\n"林森","4","0","NT$0"\r\n"合計","4","0","NT$0"');
   expect(csv).toContain('"開家接待回覆"\r\n"回覆","登記數"\r\n"是","2"\r\n"否","0"\r\n"未回覆","1"\r\n"合計","4"\r\n"合計含未列出的接待回答。"');
   expect(csv).not.toContain("家人已登記開家接待");
   expect(csv).toContain('"接待對象"\r\n"接待對象","登記數","人數"');
@@ -1285,7 +1285,7 @@ test("statistics estimate fees by identity, with cost, subsidy and the sign-ups 
     + "預估補貼 NT$110（測試晚餐尚未設定實際成本，未計入）。用餐身分未回覆 1 人，先以一般價計算。"
     + "不符報名對象（限定前已報名）：測試限定午餐 1 人。");
   // The 合計 row matches the summary above.
-  await expect(page.locator("#district-stats-rows tr td")).toHaveText(["林森", "4", "NT$450", "合計", "4", "NT$450"]);
+  await expect(page.locator("#district-stats-rows tr td")).toHaveText(["林森", "4", "0", "NT$450", "合計", "4", "0", "NT$450"]);
 });
 
 test("statistics CSV uses active registrations and published activities for the fee totals", async ({ page }, testInfo) => {
@@ -1543,4 +1543,112 @@ test("admin forms and statistics are compact: fields share rows on wide screens 
   expect(await sameRow("#staff-editor > :nth-child(1)", "#staff-editor > :nth-child(2)")).toBe(wide);
   // Nothing widens the page.
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(page.viewportSize().width);
+});
+
+// 兒童 (2026-11-09): a parent with two children in the list, one of them in it too, and a child whose parent is not.
+const familyRow = (serial, name, extra = {}) => ({ id: `${serial}23e4567-e89b-42d3-a456-426614174000`.slice(-36), serial_no: serial,
+  full_name: name, district_id: 1, record_status: "active", import_status: "pending", updated_at: "2026-11-09T00:00:00Z",
+  registration_choices: [{ activity_id: 1, attending: true }], is_child: false, parent_name: null, ...extra });
+const family = [
+  familyRow(5, "王爸爸", { children: [3, 4], registration_hosting: { status: "hosting", guest_type: "any", guest_count: 2 } }),
+  familyRow(4, "王小明", { is_child: true, parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
+  familyRow(3, "王大明", { is_child: true, parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
+  familyRow(2, "李小華", { is_child: true, parent_name: "李媽媽", district_id: 2 }),
+  familyRow(1, "陳弟兄", { children: [] }),
+];
+const familyReference = { settings: { event_name: "測試", is_hosting_open: true, is_pickup_open: true },
+  districts: [{ id: 1, name: "林森", sort_order: 1 }, { id: 2, name: "中山", sort_order: 2 }],
+  activities: [{ id: 1, title: "測試聚會", is_published: true, fee_amount: 0 }], program: [] };
+const familyReplies = {
+  list_reference: () => ({ json: familyReference }),
+  list_registrations: () => ({ json: { count: family.length, registrations: family } }),
+};
+
+test("親子 sits between 更新時間 and 操作: a child shows the parent's name, a listed parent ✓ and the children's numbers", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "測試登記", familyReplies);
+  await login(page);
+  const headers = await page.locator("#registration-table th").allTextContents();
+  expect(headers.slice(-3)).toEqual(["更新時間", "親子", "操作"]);
+  await expect(page.locator("#section-registrations .hint").filter({ hasText: "親子：" }))
+    .toHaveText("親子：兒童顯示登記時填的家長姓名；同區有效登記中有這位家長時，家長那列顯示 ✓ 與兒童流水號。");
+  await expect(page.locator("#registration-rows td:nth-child(7)")).toHaveText(["✓ 3、4", "王爸爸", "王爸爸", "李媽媽", ""]);
+  await expect(page.locator("#registration-rows .parent-check")).toHaveCSS("color", "rgb(31, 122, 63)");
+});
+
+test("協助登記 for a child hides both surveys and requires the parent's name at the bottom", async ({ page }) => {
+  const created = [];
+  await mockStaff(page, "staff", (payload) => { if (payload.action === "create_registration") created.push(payload); },
+    "測試登記", { ...familyReplies, create_registration: () => ({ status: 201, json: { serial_no: 6 } }) });
+  await login(page, "協助登記");
+  const form = page.locator("#new-registration-form");
+  await expect(form.locator(".hosting-panel")).toBeVisible();
+  await form.getByLabel("兒童").check();
+  await expect(form.locator(".hosting-panel")).toBeHidden();
+  await expect(form.locator(".child-hint")).toHaveText("兒童報名請在表單最下方填寫家長姓名。");
+  expect(await form.evaluate((element) => [...element.children].filter((item) => item.checkVisibility())
+    .slice(-2).map((item) => item.className || item.tagName))).toEqual(["parent-name", "BUTTON"]);
+  await form.locator('input[name="full_name"]').fill("王小美");
+  await form.locator('select[name="district_id"]').selectOption("1");
+  await form.locator('input[name="activity_1"][value="true"]').check();
+  await page.getByRole("button", { name: "建立協助登記" }).click();
+  expect(await form.evaluate((element) => element.checkValidity())).toBe(false);
+  await form.locator('input[name="parent_name"]').fill("  ");
+  await page.getByRole("button", { name: "建立協助登記" }).click();
+  await expect(page.locator("#message")).toHaveText("請填寫家長姓名");
+  expect(created).toHaveLength(0);
+  await form.locator('input[name="parent_name"]').fill(" 王爸爸 ");
+  await page.getByRole("button", { name: "建立協助登記" }).click();
+  await expect(page.locator("#message")).toHaveText("協助登記已建立。");
+  expect(created[0]).toMatchObject({ full_name: "王小美", is_child: true, parent_name: "王爸爸", hosting: null, pickup: null });
+  // The form starts over as an adult's.
+  await expect(form.getByLabel("兒童")).not.toBeChecked();
+  await expect(form.locator(".hosting-panel")).toBeVisible();
+  await expect(form.locator(".parent-name")).toBeHidden();
+});
+
+test("a child's record shows the parent's name read-only and can be changed back to an adult", async ({ page }) => {
+  let saved;
+  await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; },
+    "測試登記", familyReplies);
+  await login(page);
+  await page.locator("#registration-rows tr").nth(1).getByRole("button", { name: "查看／處理" }).click();
+  const form = page.locator("#edit-registration-form");
+  await expect(form.getByLabel("兒童")).toBeChecked();
+  await expect(form.getByLabel("兒童")).toBeDisabled();
+  await expect(form.locator('input[name="parent_name"]')).toHaveValue("王爸爸");
+  await expect(form.locator('input[name="parent_name"]')).toBeDisabled();
+  await expect(form.locator(".hosting-panel")).toBeHidden();
+  await expect(form.locator(".child-hint")).toBeHidden();
+
+  await page.getByRole("button", { name: "修改登記資料" }).click();
+  await expect(form.locator('input[name="parent_name"]')).toBeEditable();
+  await form.getByLabel("兒童").uncheck();
+  await expect(form.locator(".hosting-panel")).toBeVisible();
+  await expect(form.locator('#detail-hosting [name="hosting_status"][value="not_hosting"]')).toBeChecked();
+  await expect(form.locator(".parent-name")).toBeHidden();
+  await page.getByRole("button", { name: "儲存登記" }).click();
+  await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
+  expect(saved).toMatchObject({ is_child: false, pickup: { status: "no", count: 0 } });
+  expect(saved.hosting.status).toBe("not_hosting");
+  expect(saved).not.toHaveProperty("parent_name");
+});
+
+test("statistics count children per district, and the registration CSV has 兒童 and 家長姓名", async ({ page }, testInfo) => {
+  await mockStaff(page, "staff", () => {}, "測試登記", familyReplies);
+  await login(page, "統計與匯出");
+  await page.getByRole("button", { name: "更新統計" }).click();
+  await expect(page.locator("#district-stats-rows").locator("xpath=..").locator("th")).toHaveText(["區", "有效登記", "其中兒童", "預估費用"]);
+  await expect(page.locator("#district-stats-rows tr")).toHaveText([/林森\s*4\s*2/, /中山\s*1\s*1/, /合計\s*5\s*3/]);
+  test.skip(testInfo.project.name !== "desktop-chromium", "Downloads are checked once.");
+  const stats = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下載統計 CSV" }).click();
+  const statsCsv = await readFile(await (await stats).path(), "utf8");
+  expect(statsCsv).toContain('"區","有效登記","其中兒童","預估費用"');
+  expect(statsCsv).toContain('"合計","5","3","NT$0"');
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
+  const csv = await readFile(await (await download).path(), "utf8");
+  expect(csv).toContain('"流水號","姓名","區","兒童","家長姓名","匯入狀態"');
+  expect(csv).toContain('"4","王小明","林森","是","王爸爸"');
+  expect(csv).toContain('"5","王爸爸","林森","",""');
 });

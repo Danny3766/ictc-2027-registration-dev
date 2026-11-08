@@ -121,6 +121,8 @@ table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nu
 th, td { padding: .55rem .65rem; border-bottom: 1px solid #e1e8e4; text-align: left; vertical-align: middle; white-space: nowrap; }
 th { color: #59655f; background: #f6f9f7; font-size: .9rem; font-weight: 600; }
 tbody tr:hover { background: #f9fbfa; }
+/* 親子: a green check before the children's serial numbers on the parent's row. */
+.parent-check { color: #1f7a3f; font-weight: 700; }
 td button { min-height: 2rem; margin: 0 .4rem 0 0; padding: .25rem .8rem; color: #23624b; background: #fff; font-size: .9rem; }
 td button:hover { background: #e8f1ec; }
 table.numeric td:not(:first-child), table.numeric th:not(:first-child) { text-align: right; }

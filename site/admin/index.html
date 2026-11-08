@@ -59,7 +59,8 @@
             <button id="clear-search" type="button" class="secondary" disabled>清除條件</button>
           </form>
           <p id="registration-count"></p>
-          <div class="table-scroll"><table id="registration-table"><thead><tr><th>流水號</th><th>姓名</th><th>區</th><th>狀態</th><th>匯入大會</th><th>更新時間</th><th>操作</th></tr></thead><tbody id="registration-rows"></tbody></table></div>
+          <p class="hint">親子：兒童顯示登記時填的家長姓名；同區有效登記中有這位家長時，家長那列顯示 ✓ 與兒童流水號。</p>
+          <div class="table-scroll"><table id="registration-table"><thead><tr><th>流水號</th><th>姓名</th><th>區</th><th>狀態</th><th>匯入大會</th><th>更新時間</th><th>親子</th><th>操作</th></tr></thead><tbody id="registration-rows"></tbody></table></div>
           <div class="staff-actions pager"><button id="previous-page" type="button" class="secondary">上一頁</button><span id="page-number"></span><button id="next-page" type="button" class="secondary">下一頁</button></div>
         </section>
 
@@ -71,14 +72,17 @@
           <form id="edit-registration-form" class="staff-form registration-form">
             <div class="registration-columns registration-split">
               <div class="registration-main">
-                <div class="identity-fields">
+                <div class="identity-fields with-child">
                   <label>姓名<input name="full_name" maxlength="100" required /></label>
                   <label>區<select name="district_id" required></select></label>
+                  <label class="check child-check"><input type="checkbox" name="is_child" />兒童</label>
                 </div>
+                <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
                 <fieldset class="hosting-panel"><legend>開家接待與接機接待</legend><div id="detail-hosting"></div><div id="detail-pickup"></div></fieldset>
               </div>
               <fieldset class="activity-panel"><legend>公開活動選擇</legend><div id="detail-choices"></div></fieldset>
             </div>
+            <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required disabled /></label>
             <div class="form-buttons" id="registration-edit-buttons" hidden>
               <button type="submit">儲存登記</button>
               <button id="cancel-registration-edit" type="button" class="secondary">取消修改</button>
@@ -108,14 +112,17 @@
           <form id="new-registration-form" class="staff-form registration-form">
             <div class="registration-columns registration-split">
               <div class="registration-main">
-                <div class="identity-fields">
+                <div class="identity-fields with-child">
                   <label>姓名<input name="full_name" maxlength="100" required /></label>
                   <label>區<select name="district_id" required></select></label>
+                  <label class="check child-check"><input type="checkbox" name="is_child" />兒童</label>
                 </div>
+                <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
                 <fieldset class="hosting-panel"><legend>開家接待與接機接待</legend><div id="new-registration-hosting"></div><div id="new-registration-pickup"></div></fieldset>
               </div>
               <fieldset class="activity-panel"><legend>公開活動選擇</legend><div id="new-registration-choices"></div></fieldset>
             </div>
+            <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required disabled /></label>
             <button type="submit">建立協助登記</button>
           </form>
           <p id="new-registration-code" class="message" hidden></p>
@@ -131,7 +138,7 @@
           <div class="stat-cards">
             <section class="mini-card">
               <h3>各區</h3>
-              <div class="table-scroll"><table class="numeric"><thead><tr><th>區</th><th>有效登記</th><th>預估費用</th></tr></thead><tbody id="district-stats-rows"></tbody></table></div>
+              <div class="table-scroll"><table class="numeric"><thead><tr><th>區</th><th>有效登記</th><th>其中兒童</th><th>預估費用</th></tr></thead><tbody id="district-stats-rows"></tbody></table></div>
             </section>
             <section class="mini-card">
               <h3>開家接待回覆</h3>

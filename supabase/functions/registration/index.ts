@@ -52,6 +52,16 @@ export function validMealIdentity(value) {
   return value === undefined || value === null || value === "general" || value === "student";
 }
 
+// Left out, null or false: not a child (a saved registration keeps what it has when left out).
+// A child needs a parent name of 1～20 characters after trimming, counted like the database's length().
+export function validChild(isChild, parentName) {
+  if (isChild === undefined || isChild === null || isChild === false) return true;
+  if (isChild !== true || typeof parentName !== "string") return false;
+  const length = Array.from(parentName.trim()).length;
+  return length >= 1 && length <= 20;
+}
+const parentNameMessage = "請填寫家長姓名（20 字以內）";
+
 export function isUuid(value) {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
@@ -156,6 +166,7 @@ export async function handler(request) {
   }
   if (allowed !== true) return response({ error: "操作次數過多，請稍後再試" }, 429);
   if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
+  if (!validChild(body.is_child, body.parent_name)) return response({ error: parentNameMessage }, 400);
 
   if (action === "create") {
     // shortcut: Turnstile stays disabled for launch; verify body.turnstile_token here when enabled.
@@ -172,6 +183,8 @@ export async function handler(request) {
       p_hosting: body.hosting ?? null,
       p_pickup: body.pickup ?? null,
       p_meal_identity: body.meal_identity ?? null,
+      p_is_child: body.is_child === true,
+      p_parent_name: body.is_child === true ? body.parent_name : null,
     });
     if (!error) return response({ success: true }, 201);
     const mealError = mealResponse(error);
@@ -188,6 +201,7 @@ export async function handler(request) {
     if (error.message.includes("PICKUP_REQUIRED")) return pickupRequiredResponse(database);
     if (error.message.includes("INVALID_PICKUP")) return response({ error: "請檢查接機接待內容" }, 400);
     if (error.message.includes("INVALID_HOSTING")) return response({ error: invalidHostingMessage }, 400);
+    if (error.message.includes("INVALID_PARENT_NAME")) return response({ error: parentNameMessage }, 400);
     if (isInputError(error)) return response({ error: "請檢查登記資料" }, 400);
     console.error(error.message);
     return response({ error: "登記失敗，請稍後再試" }, 500);
@@ -221,7 +235,16 @@ export async function handler(request) {
       console.error("Failed to query registration pickup", pickup.error);
       return response({ error: "服務暫時無法使用" }, 503);
     }
-    return response({ ...data[0], pickup: pickup.data });
+    const child = await database.rpc("get_registration_child", {
+      p_full_name: body.full_name, p_district_id: districtId,
+    });
+    if (child.error?.message.includes("LOOKUP_CLOSED")) return response({ error: lookupClosedMessage }, 503);
+    if (child.error) {
+      console.error("Failed to query registration child fields", child.error);
+      return response({ error: "服務暫時無法使用" }, 503);
+    }
+    return response({ ...data[0], pickup: pickup.data, is_child: child.data?.is_child === true,
+      parent_name: child.data?.parent_name ?? null });
   }
 
   const { data, error } = await database.rpc("update_registration_with_pickup", {
@@ -231,6 +254,9 @@ export async function handler(request) {
     p_hosting: body.hosting ?? null,
     p_pickup: body.pickup ?? null,
     p_meal_identity: body.meal_identity ?? null,
+    // Left out keeps the stored child fields, so a page from before this release cannot clear them.
+    p_is_child: typeof body.is_child === "boolean" ? body.is_child : null,
+    p_parent_name: body.is_child === true ? body.parent_name : null,
   });
   const mealError = mealResponse(error);
   if (mealError) return mealError;
@@ -242,6 +268,7 @@ export async function handler(request) {
   if (error?.message.includes("PICKUP_REQUIRED")) return pickupRequiredResponse(database);
   if (error?.message.includes("INVALID_PICKUP")) return response({ error: "請檢查接機接待內容" }, 400);
   if (error?.message.includes("INVALID_HOSTING")) return response({ error: invalidHostingMessage }, 400);
+  if (error?.message.includes("INVALID_PARENT_NAME")) return response({ error: parentNameMessage }, 400);
   if (isInputError(error)) return response({ error: "請檢查登記資料" }, 400);
   if (error) {
     console.error("Failed to update registration", error);

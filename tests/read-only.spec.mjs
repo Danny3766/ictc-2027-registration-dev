@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 async function expectEqualIdentityColumns(fields) {
-  const boxes = await fields.locator(":scope > label").evaluateAll((labels) => labels.map((label) => {
+  // 兒童 (registration form) is a narrow third item; name and 區 are the two equal columns.
+  const boxes = await fields.locator(":scope > label:not(.child-check)").evaluateAll((labels) => labels.map((label) => {
     const { x, y, width } = label.getBoundingClientRect();
     return { x, y, width };
   }));
@@ -107,10 +108,13 @@ test("closed registration remains queryable by name and district and disables ed
   await query(page, "  測試登記  ");
 
   await expect(page.locator("#edit-form")).toBeVisible();
-  await expect(page.locator("#edit-identity")).toHaveText("測試登記｜測試區");
+  // Name and 區 show in read-only boxes; nothing in the form can be changed.
+  await expect(page.locator("#edit-full-name")).toHaveValue("測試登記");
+  await expect(page.locator("#edit-district")).toHaveValue("測試區");
   await expect(page.locator('#edit-form input[name="full_name"]')).toHaveCount(0);
   await expect(page.locator("#edit-form select")).toHaveCount(0);
-  await expect(page.locator("#edit-form input")).toHaveCount(0);
+  await expect(page.locator("#edit-form input:not([readonly]):not([disabled])")).toHaveCount(0);
+  await expect(page.locator("#edit-form").getByLabel("兒童")).not.toBeChecked();
   await expect(page.getByRole("button", { name: "修改登記內容" })).toBeHidden();
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：參加");
   await expect(page.locator("#page-message")).toHaveText("目前只能查看，無法修改登記內容。");
@@ -185,6 +189,7 @@ test("query is read-only until editing and returns to confirmation after saving"
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({
     action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
+    is_child: false, parent_name: null,
   });
   await expect(page.locator("#edit-form input[type=radio]")).toHaveCount(0);
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：不參加");
@@ -567,7 +572,8 @@ test("while hosting is closed, the lookup shows the answer read-only and saves a
   await page.locator('#edit-form input[name="activity_1"][value="false"]').check();
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
-  expect(requests[1]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }] });
+  expect(requests[1]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
+    is_child: false, parent_name: null });
 });
 
 test("a lookup without a hosting answer hides the section while hosting is closed", async ({ page }) => {
@@ -638,7 +644,8 @@ test("hosting closed during an edit keeps the activity edits and drops only the 
   await expect(hosting).toContainText("開家接待：是，可接待 2 位（弟兄）");
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
-  expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }] });
+  expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
+    is_child: false, parent_name: null });
   await page.getByRole("tab", { name: "登記參加" }).click();
   await expect(page.locator("#hosting-section")).toBeHidden();
   await expect(page.locator('#hosting-fields input, #hosting-fields select')).toHaveCount(0);
@@ -759,7 +766,8 @@ test("hosting closed while answering it for the first time keeps activity edits 
   await expect(page.getByRole("button", { name: "儲存修改" })).toBeEnabled();
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
-  expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }] });
+  expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
+    is_child: false, parent_name: null });
 });
 
 test("a description sent while editing shows in the edit view and the registration tab", async ({ page }) => {
@@ -1064,7 +1072,7 @@ test("a sign-up from before a restriction is kept until the person saves another
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({
     action: "update", full_name: "測試登記", district_id: 1, meal_identity: "general",
-    choices: [{ activity_id: 1, attending: false }, { activity_id: 2, attending: true }],
+    choices: [{ activity_id: 1, attending: false }, { activity_id: 2, attending: true }], is_child: false, parent_name: null,
   });
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：一般");
 });
@@ -1134,4 +1142,174 @@ test("link previews read the page description and never the test-site banner", a
   await page.goto("/");
   await expect(page.locator("#test-banner")).toHaveText("測試站｜請勿填寫正式登記資料");
   await expect(page.locator("#test-banner")).toBeVisible();
+});
+
+// 兒童 (2026-11-09): both surveys open, so hiding them for a child is visible; activity 2 is for hosting households only.
+const childPage = () => mealPage([
+  { id: 1, title: "測試活動", audience: "all" },
+  { id: 2, title: "接待家庭聚餐", audience: "hosting", audience_note: null },
+], { is_hosting_open: true, is_pickup_open: true });
+
+test("a child skips both surveys, may join a hosting-only activity, and must give a parent's name at the bottom", async ({ page }) => {
+  const requests = [];
+  await page.route("**/functions/v1/registration", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: childPage() });
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { success: true } });
+  });
+  await page.goto("/");
+  const form = page.locator("#registration-form");
+  const child = form.getByLabel("兒童");
+  const parent = form.locator('input[name="parent_name"]');
+  // 兒童 sits right of 區 on a wide screen and on its own row on a phone.
+  const boxes = () => form.locator(".identity-fields > label").evaluateAll((labels) =>
+    labels.map((label) => label.getBoundingClientRect()).map(({ x, bottom }) => ({ x, bottom })));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  let [, district, check] = await boxes();
+  expect(check.x).toBeGreaterThan(district.x);
+  expect(Math.abs(check.bottom - district.bottom)).toBeLessThan(2);
+  await page.setViewportSize({ width: 390, height: 900 });
+  [, district, check] = await boxes();
+  expect(check.bottom).toBeGreaterThan(district.bottom + 10);
+  await expect(form.locator(".child-hint")).toBeHidden();
+  await expect(form.locator(".parent-name")).toBeHidden();
+  await expect(form.locator('input[name="activity_2"][value="true"]')).toBeDisabled();
+
+  await child.check();
+  await expect(form.locator(".child-hint")).toHaveText("兒童報名請在表單最下方填寫家長姓名。");
+  await expect(page.locator("#hosting-section")).toBeHidden();
+  await expect(form.locator('input[name="activity_2"][value="true"]')).toBeEnabled();
+  // The parent's name comes last, right above 送出登記.
+  expect(await form.evaluate((element) => [...element.children].filter((item) => item.checkVisibility() && !item.classList.contains("honeypot"))
+    .slice(-2).map((item) => item.className || item.tagName))).toEqual(["parent-name", "BUTTON"]);
+  await form.locator('input[name="full_name"]').fill("王小明");
+  await form.locator('select[name="district_id"]').selectOption("1");
+  await form.locator('input[name="activity_1"][value="true"]').check();
+  await form.locator('input[name="activity_2"][value="true"]').check();
+  await page.getByRole("button", { name: "送出登記" }).click();
+  expect(await registrationFormValid(page)).toBe(false);
+  await parent.fill("   ");
+  await page.getByRole("button", { name: "送出登記" }).click();
+  await expect(page.locator("#page-message")).toHaveText("請填寫家長姓名");
+  expect(requests).toHaveLength(0);
+  await expect(parent).toHaveAttribute("maxlength", "20");
+
+  await parent.fill(" 王爸爸 ");
+  await page.getByRole("button", { name: "送出登記" }).click();
+  await expect(page).toHaveURL(/success\.html$/);
+  expect(requests[0]).toMatchObject({ action: "create", full_name: "王小明", is_child: true, parent_name: "王爸爸",
+    choices: [{ activity_id: 1, attending: true }, { activity_id: 2, attending: true }] });
+  expect(requests[0]).not.toHaveProperty("hosting");
+  expect(requests[0]).not.toHaveProperty("pickup");
+  await expect(page.locator("#summary-identity")).toHaveText("王小明｜測試區｜兒童（家長：王爸爸）");
+});
+
+test("unticking 兒童 brings the surveys back and sends no parent name", async ({ page }) => {
+  const requests = [];
+  await page.route("**/functions/v1/registration", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: childPage() });
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { success: true } });
+  });
+  await page.goto("/");
+  const form = page.locator("#registration-form");
+  await form.getByLabel("兒童").check();
+  await form.locator('input[name="parent_name"]').fill("王爸爸");
+  await form.getByLabel("兒童").uncheck();
+  await expect(page.locator("#hosting-section")).toBeVisible();
+  await expect(form.locator(".parent-name")).toBeHidden();
+  await form.locator('input[name="full_name"]').fill("王大明");
+  await form.locator('select[name="district_id"]').selectOption("1");
+  await form.locator('input[name="activity_1"][value="true"]').check();
+  await form.locator('input[name="activity_2"][value="false"]').check();
+  await page.locator('#hosting-fields [name="hosting_status"][value="not_hosting"]').check();
+  await page.locator('#pickup-fields [name="pickup_status"][value="no"]').check();
+  await page.getByRole("button", { name: "送出登記" }).click();
+  await expect(page).toHaveURL(/success\.html$/);
+  expect(requests[0]).toMatchObject({ is_child: false, pickup: { status: "no", count: 0 } });
+  expect(requests[0]).not.toHaveProperty("parent_name");
+  expect(requests[0].hosting.status).toBe("not_hosting");
+  await expect(page.locator("#summary-identity")).toHaveText("王大明｜測試區");
+});
+
+test("the lookup shows name, 區 and 兒童 in one row, and a child's parent name can be corrected or removed", async ({ page }) => {
+  const requests = [];
+  await page.route("**/functions/v1/registration", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: childPage() });
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (body.action === "query") return route.fulfill({ json: { ...queried(true),
+      choices: [{ activity_id: 1, title: "測試活動", attending: true }, { activity_id: 2, title: "接待家庭聚餐", attending: true }],
+      hosting: { status: "not_hosting" }, pickup: { status: "no", count: 0 }, is_child: true, parent_name: "王爸爸" } });
+    return route.fulfill({ json: { success: true } });
+  });
+  await page.goto("/");
+  await query(page);
+  const edit = page.locator("#edit-form");
+  await expect(page.locator("#edit-full-name")).toHaveValue("測試登記");
+  await expect(page.locator("#edit-district")).toHaveValue("測試區");
+  await expect(edit.getByLabel("兒童")).toBeChecked();
+  await expect(edit.getByLabel("兒童")).toBeDisabled();
+  await expect(edit.locator('input[name="parent_name"]')).toHaveValue("王爸爸");
+  await expect(edit.locator('input[name="parent_name"]')).not.toBeEditable();
+  await expect(page.locator("#edit-hosting-section")).toBeHidden();
+  await expect(edit.locator(".child-hint")).toBeHidden();
+
+  await page.getByRole("button", { name: "修改登記內容" }).click();
+  await expect(edit.locator(".child-hint")).toBeVisible();
+  await expect(page.locator("#edit-hosting-section")).toBeHidden();
+  await edit.locator('input[name="parent_name"]').fill("王媽媽");
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, parent_name: "王媽媽" });
+  expect(requests.at(-1)).not.toHaveProperty("hosting");
+  expect(requests.at(-1)).not.toHaveProperty("pickup");
+  await expect(edit.locator('input[name="parent_name"]')).toHaveValue("王媽媽");
+
+  // No longer a child: both surveys come back with 否 chosen, and the restricted activity locks.
+  await page.getByRole("button", { name: "修改登記內容" }).click();
+  await edit.getByLabel("兒童").uncheck();
+  await expect(page.locator("#edit-hosting-section")).toBeVisible();
+  await expect(page.locator('#edit-hosting [name="hosting_status"][value="not_hosting"]')).toBeChecked();
+  await expect(page.locator('#edit-pickup [name="pickup_status"][value="no"]')).toBeChecked();
+  await expect(edit.locator(".parent-name")).toBeHidden();
+  await expect(edit.locator('input[name="activity_2"][value="false"]')).toBeChecked();
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  expect(requests.at(-1)).toMatchObject({ is_child: false, parent_name: null, pickup: { status: "no", count: 0 },
+    choices: [{ activity_id: 1, attending: true }, { activity_id: 2, attending: false }] });
+  expect(requests.at(-1).hosting.status).toBe("not_hosting");
+});
+
+test("an adult becoming a child must give the parent's name before saving", async ({ page }) => {
+  const requests = [];
+  await page.route("**/functions/v1/registration", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: childPage() });
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    if (body.action === "query") return route.fulfill({ json: { ...queried(true),
+      choices: [{ activity_id: 1, title: "測試活動", attending: true }, { activity_id: 2, title: "接待家庭聚餐", attending: false }],
+      hosting: { status: "hosting", guest_type: "any", guest_count: 2 }, pickup: { status: "yes", count: 3 },
+      is_child: false, parent_name: null } });
+    return route.fulfill({ json: { success: true } });
+  });
+  await page.goto("/");
+  await query(page);
+  const edit = page.locator("#edit-form");
+  await expect(edit.getByLabel("兒童")).not.toBeChecked();
+  await expect(edit.locator(".parent-name")).toBeHidden();
+  await page.getByRole("button", { name: "修改登記內容" }).click();
+  await edit.getByLabel("兒童").check();
+  await expect(page.locator("#edit-hosting-section")).toBeHidden();
+  await expect(edit.locator(".parent-name")).toBeVisible();
+  // An empty required name leaves 儲存修改 disabled; spaces alone pass the browser check but not ours.
+  await expect(page.getByRole("button", { name: "儲存修改" })).toBeDisabled();
+  await edit.locator('input[name="parent_name"]').fill("  ");
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  await expect(page.locator("#page-message")).toHaveText("請填寫家長姓名");
+  expect(requests.filter((body) => body.action === "update")).toHaveLength(0);
+  await edit.locator('input[name="parent_name"]').fill("王爸爸");
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, parent_name: "王爸爸" });
+  expect(requests.at(-1)).not.toHaveProperty("hosting");
+  await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
+  await expect(page.locator("#edit-hosting-section")).toBeHidden();
 });

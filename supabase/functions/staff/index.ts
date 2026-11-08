@@ -43,6 +43,27 @@ export function validMealIdentity(value) {
   return value === undefined || value === null || value === "general" || value === "student";
 }
 
+// Same rule as the public registration function: left out, null or false is not a child (a saved
+// registration keeps what it has when left out); a child needs a parent name of 1～20 characters.
+export function validChild(isChild, parentName) {
+  if (isChild === undefined || isChild === null || isChild === false) return true;
+  if (isChild !== true || typeof parentName !== "string") return false;
+  const length = Array.from(parentName.trim()).length;
+  return length >= 1 && length <= 20;
+}
+const parentNameMessage = "請填寫家長姓名（20 字以內）";
+
+// The 親子 column: the serial numbers of the active children naming each active, non-child row as
+// their parent (same district and name key). Children only ever show their own parent's name.
+export function childrenByParent(rows, children) {
+  for (const row of rows) {
+    if (row.record_status !== "active" || row.is_child) continue;
+    row.children = children.filter((child) => child.district_id === row.district_id
+      && child.parent_name_key === row.name_key).map((child) => child.serial_no);
+  }
+  return rows;
+}
+
 // The registration list's 區 filter: left out (or null) means every district.
 export function validDistrictFilter(value) {
   return value === undefined || value === null || (Number.isSafeInteger(value) && value > 0);
@@ -169,7 +190,7 @@ export async function handler(request) {
     }
     if (!validDistrictFilter(body.district_id)) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
-      .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,registration_choices(activity_id,attending),meal_identity,registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)",
+      .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,registration_choices(activity_id,attending),meal_identity,is_child,parent_name,name_key,registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)",
         beforeSerial === null ? { count: "exact" } : undefined)
       .order("serial_no", { ascending: false });
     // 10 rows a page, matching REGISTRATIONS_PER_PAGE in site/admin/staff.js.
@@ -186,6 +207,17 @@ export async function handler(request) {
     if (error) {
       console.error("Failed to list registrations", error);
       return response({ error: "名單載入失敗" }, 503);
+    }
+    // Only the 10-row list shows 親子; one indexed lookup covers the page. The export pages skip it.
+    const parents = beforeSerial === null ? data.filter((row) => row.record_status === "active" && !row.is_child)
+      .map((row) => ({ district_id: row.district_id, name_key: row.name_key })) : [];
+    if (parents.length) {
+      const { data: children, error: childrenError } = await database.rpc("registration_children", { p_parents: parents });
+      if (childrenError) {
+        console.error("Failed to list registration children", childrenError);
+        return response({ error: "名單載入失敗" }, 503);
+      }
+      childrenByParent(data, children);
     }
     return response({ registrations: data, count });
   }
@@ -207,11 +239,15 @@ export async function handler(request) {
   if (["save_registration", "set_import_status", "void_registration"].includes(body.action)) {
     if (!isUuid(body.registration_id)) return response({ error: "INVALID_REQUEST" }, 400);
     if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
+    if (!validChild(body.is_child, body.parent_name)) return response({ error: parentNameMessage }, 400);
     const operation = {
       save_registration: ["staff_update_registration_with_pickup", {
         p_registration_id: body.registration_id, p_full_name: body.full_name,
         p_district_id: body.district_id, p_choices: body.choices, p_hosting: body.hosting ?? null,
         p_meal_identity: body.meal_identity ?? null, p_pickup: body.pickup ?? null,
+        // Left out keeps the stored child fields, so an older back-office page cannot clear them.
+        p_is_child: typeof body.is_child === "boolean" ? body.is_child : null,
+        p_parent_name: body.is_child === true ? body.parent_name : null,
       }],
       set_import_status: ["staff_set_import_status", {
         p_registration_id: body.registration_id, p_status: body.status,
@@ -229,6 +265,7 @@ export async function handler(request) {
       if (error.message?.includes("NAME_TAKEN")) return response({ error: "此姓名與區已有有效登記" }, 409);
       if (error.message?.includes("INVALID_HOSTING")) return response({ error: "請檢查開家接待內容" }, 400);
       if (error.message?.includes("INVALID_PICKUP")) return response({ error: "請檢查接機接待內容" }, 400);
+      if (error.message?.includes("INVALID_PARENT_NAME")) return response({ error: parentNameMessage }, 400);
       if (error.message?.includes("INVALID_VOID_REASON")) return response({ error: "請填寫作廢原因（200 字以內）" }, 400);
       if (isInputError(error)) return response({ error: "請檢查資料與活動選擇" }, 400);
       console.error("Failed staff registration operation", error);
@@ -241,10 +278,12 @@ export async function handler(request) {
   if (body.action === "create_registration") {
     if (!isUuid(body.create_request_id)) return response({ error: "INVALID_REQUEST" }, 400);
     if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
+    if (!validChild(body.is_child, body.parent_name)) return response({ error: parentNameMessage }, 400);
     const { data, error } = await database.rpc("staff_create_registration_with_pickup", {
       p_actor: profile.auth_user_id, p_request_id: body.create_request_id,
       p_full_name: body.full_name, p_district_id: body.district_id, p_choices: body.choices,
       p_hosting: body.hosting ?? null, p_meal_identity: body.meal_identity ?? null, p_pickup: body.pickup ?? null,
+      p_is_child: body.is_child === true, p_parent_name: body.is_child === true ? body.parent_name : null,
     });
     if (!error && data?.length === 1) return response({ serial_no: data[0].serial_no }, 201);
     if (error?.message?.includes("DUPLICATE_REQUEST")) return response({ error: "此協助登記已建立，請重新整理名單確認" }, 409);
@@ -260,6 +299,7 @@ export async function handler(request) {
     }
     if (error?.message?.includes("INVALID_HOSTING")) return response({ error: "請檢查開家接待內容" }, 400);
     if (error?.message?.includes("INVALID_PICKUP")) return response({ error: "請檢查接機接待內容" }, 400);
+    if (error?.message?.includes("INVALID_PARENT_NAME")) return response({ error: parentNameMessage }, 400);
     if (isInputError(error)) return response({ error: "請檢查登記資料" }, 400);
     console.error("Failed to create staff registration", error);
     return response({ error: "協助登記失敗，請稍後再試" }, 503);

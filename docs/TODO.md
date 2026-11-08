@@ -365,6 +365,19 @@ Q43 已確認。
 - [x] 正式專案：Dashboard 部署同一份 `staff` Edge Function（Verify JWT 維持開啟）。（2026-11-08）
 - [x] PR `develop` → `main`，以 **Create a merge commit** 合併；部署後確認正式站後台的區篩選與按鈕文字。不需關閉登記。（2026-11-08 PR #41 完成）
 
+## 本次新增必要範圍：兒童報名
+
+決策見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-09 兒童報名」一節。部署順序：每個環境都先套用 migration，再部署 `registration` 與 `staff` Edge Function，最後部署前端；不需關閉登記。
+
+- [x] 本機完成：`202611090001_child_registration.sql` 新增兒童與家長姓名欄位、親子比對索引、兒童不受開家／接機報名對象限制與兩題存「否」；`registration`、`staff` Edge Function 接受 `is_child`、`parent_name`，查詢回傳兒童欄位，名單回傳親子對應；公開頁、查詢修改頁、協助登記與後台單筆修改加兒童勾選框與家長姓名；登記名單「親子」欄與說明、各區統計「其中兒童」、個人明細 CSV「兒童」「家長姓名」。資料庫驗證腳本 `supabase/testing/verify-child-registration.sql`、Edge Function 單元測試與 Playwright 已補。（2026-11-09）
+- [ ] PR `feat/child-registration` → `develop`，合併後在 `develop` 跑完整 Playwright。
+- [ ] 測試專案：SQL Editor 套用 `202611090001_child_registration.sql`，再執行 `supabase/testing/verify-child-registration.sql`，結果應顯示 `CHILD_REGISTRATION_OK` 並回滾。
+- [ ] 測試專案：Dashboard 部署 `develop` 上的 `registration`（Verify JWT 關閉）與 `staff`（Verify JWT 開啟）Edge Function。
+- [ ] 更新測試站前端，請弟兄們測試：兒童登記與家長姓名必填、兒童不顯示開家／接機、查詢修改切換兒童、協助登記與後台修改、親子欄、其中兒童與 CSV 欄位。
+- [ ] 弟兄們確認後，正式專案依同樣順序套用 migration、部署兩個 Edge Function。
+- [ ] PR `develop` → `main`，以 **Create a merge commit** 合併；部署後確認正式站的兒童勾選框與後台親子欄。不需關閉登記。
+- [ ] 上線後在 LINE 群組公告：已經幫兒童登記的家庭，用「查詢或修改登記」勾選兒童並填家長姓名。
+
 - [x] 本機完成：`202611060003_revoke_default_api_grants.sql` 撤銷 Supabase 預設給 `anon`、`authenticated` 的資料表、序列與函式權限，只保留原本刻意開放的公開讀取，並停止新物件自動授權。在模擬 Supabase 預設權限的本機資料庫驗證：私有資料表匿名不可讀、函式匿名不可執行；四支 `supabase/testing` 驗證以 `service_role` 執行通過。
 - [x] 本機完成：`supabase/production/baseline_202611060003.sql` 依序串接 16 支 migration 成單一交易，與逐支執行比對結構、權限與初始資料完全一致。
 - [x] `pages.yml` 只由 `main` 觸發；分支與發布規則寫入 [正式環境設定流程](正式環境setup.md) 第 7、9 節。
