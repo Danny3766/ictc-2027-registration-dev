@@ -38,9 +38,9 @@ function mealResponse(error) {
   return null;
 }
 
-// Left out (or null) means no answer; anything else must be one of the two codes.
+// Left out (or null) means no answer; code syntax is checked here; the database checks existence and eligibility.
 export function validMealIdentity(value) {
-  return value === undefined || value === null || value === "general" || value === "student";
+  return value === undefined || value === null || (typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value));
 }
 
 // Same rule as the public registration function: left out, null or false is not a child (a saved
@@ -238,17 +238,18 @@ export async function handler(request) {
   }
 
   if (body.action === "list_reference") {
-    const [settings, districts, activities, program] = await Promise.all([
+    const [settings, districts, activities, program, identities] = await Promise.all([
       database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_lookup_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description").single(),
       database.from("districts").select("id,name,sort_order").order("sort_order"),
-      database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,cost_amount,audience,audience_note,is_published,sort_order").order("sort_order"),
+      database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),cost_amount,audience,audience_note,is_published,sort_order").order("sort_order"),
       database.from("program_items").select("id,event_date,start_time,end_time,title,note,sort_order,is_visible").order("sort_order"),
+      database.from("registration_identities").select("code,name,is_active,public_selectable").order("sort_order"),
     ]);
-    if ([settings, districts, activities, program].some((item) => item.error)) {
-      console.error("Failed to load staff reference data", [settings, districts, activities, program].map((item) => item.error));
+    if ([settings, districts, activities, program, identities].some((item) => item.error)) {
+      console.error("Failed to load staff reference data", [settings, districts, activities, program, identities].map((item) => item.error));
       return response({ error: "後台資料載入失敗" }, 503);
     }
-    return response({ settings: settings.data, districts: districts.data, activities: activities.data, program: program.data });
+    return response({ settings: settings.data, districts: districts.data, activities: activities.data, program: program.data, identities: identities.data });
   }
 
   if (["save_registration", "set_import_status", "void_registration"].includes(body.action)) {
@@ -342,7 +343,7 @@ export async function handler(request) {
 
   if (body.action === "save_reference") {
     // Districts are fixed: renaming one would break the name + district lookup of existing registrations.
-    if (!["settings", "hosting", "activity", "program"].includes(body.kind)
+    if (!["settings", "hosting", "activity", "program", "identity", "delete_identity"].includes(body.kind)
       || !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
       return response({ error: "INVALID_REQUEST" }, 400);
     }
@@ -351,6 +352,12 @@ export async function handler(request) {
     });
     if (error) {
       if (lostAccess(error)) return lostAccessResponse();
+      // 23503: a registration took the identity between the check and the delete.
+      if (error.message?.includes("IDENTITY_IN_USE") || (body.kind === "delete_identity" && error.code === "23503")) {
+        return response({ error: "身分已使用或為系統保留，請改為停用" }, 400);
+      }
+      // An identity deleted while the activity form was open.
+      if (error.code === "23503") return response({ error: "有身分已不存在，請重新整理頁面" }, 409);
       if (error.code === "23505") return response({ error: "名稱已存在" }, 409);
       if (error.message?.includes("ACTIVITY_AUDIENCE_CYCLE")) {
         return response({ error: "報名對象不能設定為活動本身，也不能形成活動之間的循環條件" }, 400);

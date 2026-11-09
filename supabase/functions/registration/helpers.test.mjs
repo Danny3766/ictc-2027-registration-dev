@@ -21,9 +21,9 @@ test("source keys are keyed hashes, so the stored value never contains the IP", 
   assert.match(first, /^[0-9a-f]{64}$/);
 });
 
-test("a meal identity is left out, null, or one of the two codes", () => {
-  for (const value of [undefined, null, "general", "student"]) assert.equal(validMealIdentity(value), true);
-  for (const value of ["", "Student", "teacher", 1, true, {}, ["student"]]) assert.equal(validMealIdentity(value), false);
+test("a meal identity is left out, null, or a well-formed code; the database checks that it exists", () => {
+  for (const value of [undefined, null, "general", "student", "child", "identity_0a1b", "a".repeat(64)]) assert.equal(validMealIdentity(value), true);
+  for (const value of ["", "Student", "bad code", "a".repeat(65), 1, true, {}, ["student"]]) assert.equal(validMealIdentity(value), false);
 });
 
 test("a child needs a parent name of 1 to 20 characters; anything else about the flag is refused", () => {

@@ -45,6 +45,7 @@
           <a href="#admin-accounts" data-admin-link hidden>帳號</a>
           <a href="#admin-settings" data-admin-link hidden>網站設定</a>
           <a href="#admin-hosting" data-admin-link hidden>開家與接機接待</a>
+          <a href="#admin-identities" data-admin-link hidden>身分別</a>
           <a href="#admin-activities" data-admin-link hidden>活動</a>
           <a href="#admin-program" data-admin-link hidden>時間表</a>
           <button id="change-password-button" type="button" class="secondary">更改密碼</button>
@@ -60,7 +61,7 @@
             <button id="clear-search" type="button" class="secondary" disabled>清除條件</button>
           </form>
           <p id="registration-count"></p>
-          <p class="hint family-hint"><strong>親子：</strong>兒童顯示登記時填的家長姓名；同區有效登記中有這位家長時，家長那列顯示 ✓ 與兒童流水號（#），按「查看／處理」可看到兒童姓名。</p>
+          <p class="hint family-hint"><strong>親子：</strong>兒童顯示登記時填寫的家長姓名；家長顯示同區有效登記中對應的兒童姓名。</p>
           <div class="table-scroll"><table id="registration-table"><thead><tr><th>流水號</th><th>姓名</th><th>區</th><th>狀態</th><th>匯入大會</th><th>更新時間</th><th>親子</th><th>操作</th></tr></thead><tbody id="registration-rows"></tbody></table></div>
           <div class="staff-actions pager"><button id="previous-page" type="button" class="secondary">上一頁</button><span id="page-number"></span><button id="next-page" type="button" class="secondary">下一頁</button></div>
         </section>
@@ -136,7 +137,7 @@
           <div class="staff-actions"><button id="refresh-stats" type="button">更新統計</button><button id="download-csv" type="button" class="secondary">下載報名登記 CSV</button><button id="download-stats-csv" type="button" class="secondary">下載統計 CSV</button></div>
           <p id="stats-summary"></p>
           <h3>各活動</h3>
-          <div class="table-scroll"><table class="numeric"><thead><tr><th>活動</th><th>參加</th><th>其中學生</th><th>不參加</th><th>未回覆</th><th>預估費用</th><th>預估成本</th><th>預估補貼</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
+          <div class="table-scroll"><table class="numeric"><thead><tr><th>活動</th><th>參加</th><th>其中學生</th><th>其中兒童</th><th>不參加</th><th>未回覆</th><th>預估費用</th><th>預估成本</th><th>預估補貼</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
           <div class="stat-cards">
             <section class="mini-card">
               <h3>各區</h3>
@@ -236,6 +237,21 @@
           </form>
         </section>
 
+        <section id="admin-identities" class="card" data-view="admin-identities" hidden>
+          <h2>用餐身分</h2>
+          <form id="identity-form" class="staff-form compact-form">
+            <input name="code" type="hidden" />
+            <div class="field-row">
+              <label>身分名稱<input name="name" maxlength="30" required /></label>
+              <label class="check"><input name="is_active" type="checkbox" checked />啟用</label>
+              <label class="check"><input name="public_selectable" type="checkbox" checked />開放報名者選擇</label>
+              <button type="submit">儲存身分</button><button type="reset" class="secondary">取消／新增</button>
+            </div>
+          </form>
+          <p class="hint">已使用的身分只能停用；一般與兒童保留。兒童由勾選「兒童」自動帶入。</p>
+          <div class="table-scroll"><table><thead><tr><th>身分</th><th>狀態</th><th>開放選擇</th><th>操作</th></tr></thead><tbody id="identity-rows"></tbody></table></div>
+        </section>
+
         <section id="admin-activities" class="card" data-view="admin-activities" hidden>
           <h2>活動</h2>
           <p id="reorder-hint" class="hint" hidden>拖曳右側 ☰ 調整順序，或聚焦 ☰ 後按 ↑ ↓；完成後按「完成排序」儲存。</p>
@@ -262,11 +278,21 @@
               <label class="grow">地址<input name="address" maxlength="300" /></label>
               <label class="grow">地圖連結<input name="map_url" type="url" maxlength="1000" /></label>
             </div>
-            <div class="field-row">
-              <label>一般每人費用<input name="fee_amount" type="number" min="0" /><small class="field-hint">留空代表未設定</small></label>
-              <label>學生每人費用<input name="student_fee_amount" type="number" min="0" /><small class="field-hint">留空代表沒有學生價；0 代表學生免費</small></label>
-              <label>實際每人成本<input name="cost_amount" type="number" min="0" /><small class="field-hint">只在後台統計顯示，公開頁看不到</small></label>
-              <label>排序<input name="sort_order" type="number" /><small class="field-hint">選填；留空排最後</small></label>
+            <div class="activity-pricing-layout">
+              <div>
+                <h3>各身分每人費用</h3>
+                <div class="activity-price-table">
+                  <div class="activity-price-header" aria-hidden="true"><span>用餐身分</span><span>每人費用（NT$）</span></div>
+                  <label class="activity-price-row"><span id="general-price-name">一般</span><input name="fee_amount" type="number" min="0" placeholder="未設定" aria-label="一般每人費用" /></label>
+                  <div id="identity-prices"></div>
+                </div>
+                <p class="field-hint">各身分價格獨立設定；留空表示尚未提出收費，填 0 表示免費。</p>
+              </div>
+              <aside class="activity-price-settings">
+                <h3>管理設定</h3>
+                <label>實際每人成本<input name="cost_amount" type="number" min="0" /><small class="field-hint">每人 NT$，僅供後台統計，不公開顯示</small></label>
+                <label>排序<input name="sort_order" type="number" placeholder="留空排最後" /><small class="field-hint">選填</small></label>
+              </aside>
             </div>
             <div class="field-row">
               <label>報名對象<select name="audience"><option value="all">所有人</option><option value="hosting">有開家接待的聖徒（含家人已登記開家接待）</option><option value="pickup">接機接待</option></select></label>

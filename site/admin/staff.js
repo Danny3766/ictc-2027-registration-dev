@@ -22,7 +22,7 @@ let editingRegistration = false;
 // Must match the page size of list_registrations in the staff Edge Function.
 const REGISTRATIONS_PER_PAGE = 10;
 let editingStaff = null;
-const adminSections = ["#admin-accounts", "#admin-settings", "#admin-hosting", "#admin-activities", "#admin-program"];
+const adminSections = ["#admin-identities", "#admin-accounts", "#admin-settings", "#admin-hosting", "#admin-activities", "#admin-program"];
 
 function showAdminSections(visible) {
   for (const selector of adminSections) document.querySelector(selector).hidden = !visible;
@@ -68,12 +68,23 @@ const hostingOf = (registration) => Hosting.normalize(registration.registration_
 const pickupOf = (registration) => Pickup.normalize(registration.registration_pickup);
 const attends = (registration, activity) =>
   registration.registration_choices.some((choice) => choice.activity_id === activity.id && choice.attending);
-// What this person pays for the given activities, by their identity (general price until answered).
-const mealFee = (registration, activities) => activities
-  .filter((activity) => attends(registration, activity))
-  .reduce((sum, activity) => sum + Meals.fee(activity, registration.meal_identity), 0);
-// Blank when no attended meal has a student price, even if an identity is still stored from before an
-// admin removed the price; 未回覆 when one is needed but missing.
+const priced = (activity) => activity.fee_amount != null || activity.student_fee_amount != null
+  || activity.activity_identity_prices?.length > 0;
+// Whose fee is unset: the identity, 未回覆身分者, or the activity when it has no price at all.
+const unsetLabel = (registration, activity) => !priced(activity) ? activity.title
+  : registration.meal_identity ? Meals.identityLabels[registration.meal_identity] ?? registration.meal_identity : "未回覆身分者";
+// The fees of [registration, activity] attendances; unset ones are left out of the sum and named.
+const feeOf = (attendances) => {
+  const fees = attendances.map(([registration, activity]) => Meals.fee(activity, registration.meal_identity));
+  return { ...Meals.addFees(fees), unset: attendances.filter((_, index) => fees[index] == null)
+    .map(([registration, activity]) => unsetLabel(registration, activity)) };
+};
+// "NT$800（兒童未計入）"; "—" when nothing is set, like a missing cost.
+const feeText = ({ sum, known, unset }) => !unset.length ? `NT$${sum}`
+  : known ? `NT$${sum}（${[...new Set(unset)].join("、")}未計入）` : "—";
+// The summary and 各區 show only the amount; 各活動 names what is left out.
+const amountText = ({ sum, known, unset }) => known || !unset.length ? `NT$${sum}` : "—";
+// Blank when no published meal is attended; the database retains the stored identity.
 const identityText = (registration, activities) => {
   if (!Meals.needsIdentity(activities, registration.registration_choices)) return "";
   return registration.meal_identity ? Meals.identityLabels[registration.meal_identity] : "未回覆";
@@ -386,7 +397,10 @@ function renderReferenceRows(only) {
         cell(row, value);
       }
       editButton(row, () => {
-        if (table === "#activity-rows") setAudienceOptions(item.id);
+        if (table === "#activity-rows") {
+          setAudienceOptions(item.id);
+          renderIdentityPrices(item);
+        }
         fillForm(document.querySelector(form), transform(item));
         setEditing(document.querySelector(form), item);
       });
@@ -397,9 +411,13 @@ function renderReferenceRows(only) {
         handle.className = "drag-handle";
         handle.textContent = "☰";
         handle.setAttribute("aria-label", `拖曳排序：${item.title}`);
+        // Outside reordering the column shows each activity's place in the order instead of ☰.
+        const number = document.createElement("span");
+        number.className = "sort-number";
+        number.textContent = rows.children.length + 1;
         const handleCell = cell(row, "");
         handleCell.className = "reorder-col";
-        handleCell.append(handle);
+        handleCell.append(number, handle);
       }
       rows.append(row);
     }
@@ -413,6 +431,8 @@ function renderReference() {
   }, false);
   fillForm(document.querySelector("#hosting-settings-form"), reference.settings, false);
   setAudienceOptions(document.querySelector("#activity-form").dataset.editingId);
+  renderIdentities();
+  renderIdentityPrices();
   renderReferenceRows();
   renderNewRegistrationForm();
 }
@@ -436,9 +456,9 @@ async function saveReference(event, kind) {
     data.ends_at_has_time = Boolean(data.ends_time);
     data.sort_order = activitySortOrder(form, data.sort_order);
     for (const name of ["starts_on", "starts_time", "ends_on", "ends_time"]) delete data[name];
-    if (data.student_fee_amount !== "" && data.fee_amount === "") {
-      return showMessage("設定學生每人費用前，請先填寫一般每人費用。", true);
-    }
+    data.identity_prices = identityPricesFrom(form);
+    // Older readers still use student_fee_amount.
+    data.student_fee_amount = data.identity_prices.find((price) => price.identity_code === "student")?.fee_amount ?? "";
   }
   // An activity save would change the list being reordered; other saves leave the drag order alone.
   if (kind === "activity" && activitySection.classList.contains("reordering")) {
@@ -465,6 +485,7 @@ async function saveReference(event, kind) {
   try {
     await api("save_reference", { kind, data });
     reference = await api("list_reference");
+    Meals.configure(reference.identities, true);
     renderReference();
     if (!["settings", "hosting"].includes(kind)) form.reset();
     showMessage("設定已儲存。");
@@ -491,14 +512,10 @@ async function loadRegistrations() {
     statusCell(row, "record", registration.record_status);
     statusCell(row, "import", registration.import_status);
     cell(row, shortTime(registration.updated_at));
-    // 親子: a child shows the parent's name as entered; a parent found in the list shows ✓ and the
-    // children's serial numbers (the hint above the table says so for other staff).
-    const family = cell(row, registration.is_child ? registration.parent_name : "");
+    // Same-district active family matches are named directly in the list.
+    const family = cell(row, registration.is_child ? `家長：${registration.parent_name}` : "");
     if (registration.children?.length) {
-      const check = document.createElement("span");
-      check.className = "parent-check";
-      check.textContent = "✓";
-      family.append(check, ` ${registration.children.map((child) => `#${child.serial_no}`).join(" ")}`);
+      family.textContent = `兒童：${registration.children.map((child) => child.full_name).join("、")}`;
     }
     const actions = cell(row, "");
     const edit = document.createElement("button");
@@ -544,18 +561,23 @@ async function showStatistics() {
   const activities = currentActivities();
   const rows = document.querySelector("#stats-rows");
   rows.replaceChildren();
-  const total = { fee: 0, cost: 0, subsidy: 0 };
+  const total = { attendances: [], cost: 0, subsidy: { sum: 0, known: 0, unset: [] } };
   const outside = [];
   for (const activity of activities) {
     const [attending, notAttending, unanswered] = countAnswers(registrations, activity);
     const attendees = registrations.filter((registration) => attends(registration, activity));
-    const fee = attendees.reduce((sum, registration) => sum + Meals.fee(activity, registration.meal_identity), 0);
-    // The subsidy is what the real cost exceeds the estimated fees by; without a cost there is none to show.
+    const attendances = attendees.map((registration) => [registration, activity]);
+    const fee = feeOf(attendances);
+    total.attendances.push(...attendances);
+    // The subsidy is what the real cost exceeds the estimated fees by, over the people whose fee is set;
+    // without a cost there is none to show.
     const cost = activity.cost_amount == null ? null : attending * activity.cost_amount;
-    total.fee += fee;
+    const subsidy = cost === null ? null : { ...fee, sum: fee.known * activity.cost_amount - fee.sum };
     if (cost !== null) {
       total.cost += cost;
-      total.subsidy += cost - fee;
+      total.subsidy.sum += subsidy.sum;
+      total.subsidy.known += subsidy.known;
+      total.subsidy.unset.push(...subsidy.unset);
     }
     const restricted = attendees.filter((registration) => !Meals.eligible(activity, {
       isChild: registration.is_child, hostingStatus: hostingOf(registration)?.status, pickupStatus: pickupOf(registration)?.status,
@@ -565,41 +587,42 @@ async function showStatistics() {
     const students = Meals.hasStudentPrice(activity)
       ? attendees.filter((registration) => registration.meal_identity === "student").length : "—";
     const row = document.createElement("tr");
-    for (const value of [activity.title, attending, students, notAttending, unanswered, `NT$${fee}`,
-      cost === null ? "—" : `NT$${cost}`, cost === null ? "—" : `NT$${cost - fee}`]) cell(row, value);
+    for (const value of [activity.title, attending, students, attendees.filter((registration) => registration.is_child).length, notAttending, unanswered, feeText(fee),
+      cost === null ? "—" : `NT$${cost}`, cost === null ? "—" : feeText(subsidy)]) cell(row, value);
     rows.append(row);
   }
   const noIdentity = registrations.filter((registration) => identityText(registration, activities) === "未回覆").length;
   // Cost and subsidy cover only the activities with a cost set. A charged activity still without one is
   // named, so the totals are not read as complete; free activities such as meetings need no cost.
-  const uncosted = activities.filter((activity) => activity.fee_amount != null && activity.cost_amount == null);
+  const uncosted = activities.filter((activity) => priced(activity) && activity.cost_amount == null);
   const costText = activities.every((activity) => activity.cost_amount == null)
     ? "預估成本 —；預估補貼 —（尚未設定實際成本）"
-    : `預估成本 NT$${total.cost}；預估補貼 NT$${total.subsidy}`
-      + (uncosted.length ? `（${uncosted.map((activity) => activity.title).join("、")}尚未設定實際成本，未計入）` : "");
+    : `預估成本 NT$${total.cost}；預估補貼 ${amountText(total.subsidy)}`
+      + (uncosted.length ? `；${uncosted.map((activity) => activity.title).join("、")}尚未設定實際成本，未計入` : "");
   document.querySelector("#stats-summary").textContent = [
-    `有效登記 ${registrations.length} 筆；預估費用 NT$${total.fee}；${costText}。`,
-    noIdentity ? `用餐身分未回覆 ${noIdentity} 人，先以一般價計算。` : "",
+    `有效登記 ${registrations.length} 筆；預估費用 ${amountText(feeOf(total.attendances))}；${costText}。`,
+    noIdentity ? `用餐身分未回覆 ${noIdentity} 人。` : "",
     outside.length ? `不符報名對象（限定前已報名）：${outside.join("、")}。` : "",
   ].join("");
   const districtRows = document.querySelector("#district-stats-rows");
   districtRows.replaceChildren();
-  const districtTotal = { people: 0, children: 0, fee: 0 };
+  const districtTotal = { people: 0, children: 0, attendances: [] };
   // A 全會所 card, then one per district; no 合計 row, since adding activities would count a person twice.
   const districtCards = [districtActivityCard({ name: "全會所" }, registrations, activities)];
   for (const district of reference.districts) {
     const people = registrations.filter((item) => item.district_id === district.id);
-    const fee = people.reduce((sum, person) => sum + mealFee(person, activities), 0);
+    const attendances = people.flatMap((person) => activities.filter((activity) => attends(person, activity))
+      .map((activity) => [person, activity]));
     const children = people.filter((person) => person.is_child).length;
     districtTotal.people += people.length;
     districtTotal.children += children;
-    districtTotal.fee += fee;
+    districtTotal.attendances.push(...attendances);
     const row = document.createElement("tr");
-    for (const value of [district.name, people.length, children, `NT$${fee}`]) cell(row, value);
+    for (const value of [district.name, people.length, children, amountText(feeOf(attendances))]) cell(row, value);
     districtRows.append(row);
     districtCards.push(districtActivityCard(district, people, activities));
   }
-  totalRow(districtRows, [districtTotal.people, districtTotal.children, `NT$${districtTotal.fee}`]);
+  totalRow(districtRows, [districtTotal.people, districtTotal.children, amountText(feeOf(districtTotal.attendances))]);
   document.querySelector("#district-activity-cards").replaceChildren(...districtCards);
   showHostingStatistics(registrations);
 }
@@ -716,11 +739,21 @@ async function downloadStatisticsCsv() {
   saveCsv(rows, "registration-statistics.csv");
 }
 
+// What this person pays for the attended activities, by their identity. The CSV keeps it a number, the
+// set fees' sum, and names the activities left out in the next column.
+const personFee = (registration, activities) => {
+  const attended = activities.filter((activity) => attends(registration, activity));
+  const fees = attended.map((activity) => Meals.fee(activity, registration.meal_identity));
+  const { sum, known } = Meals.addFees(fees);
+  const unsetTitles = attended.filter((_, index) => fees[index] == null).map((activity) => activity.title);
+  return [known || !unsetTitles.length ? sum : "未設定", unsetTitles.join("、")];
+};
+
 async function downloadCsv() {
   const activities = currentActivities();
   const districts = new Map(reference.districts.map((item) => [item.id, item.name]));
   const rows = [["流水號", "姓名", "區", "兒童", "家長姓名", "匯入狀態", ...activities.map((item) => item.title),
-    "開家接待", "接待對象", "可接待人數", "是否可以接機", "可接機人數", "用餐身分", "預估應付餐費"]];
+    "開家接待", "接待對象", "可接待人數", "是否可以接機", "可接機人數", "用餐身分", "預估應付餐費", "餐費未計入的活動"]];
   for (const registration of activeRegistrations(await allRegistrations())) {
     const choices = new Map(registration.registration_choices.map((item) => [item.activity_id, item.attending]));
     const hosting = hostingOf(registration);
@@ -733,7 +766,7 @@ async function downloadCsv() {
       hosting ? Hosting.statusLabels[hosting.status] : "未回覆",
       hosting?.guest_type ? Hosting.guestLabels[hosting.guest_type] : "",
       hosting?.guest_count ?? "", pickup ? Pickup.labels[pickup.status] : "", pickup?.count ?? "",
-      identityText(registration, activities), mealFee(registration, activities),
+      identityText(registration, activities), ...personFee(registration, activities),
     ]);
   }
   saveCsv(rows, "registration-export.csv");
@@ -996,6 +1029,7 @@ async function openStaff() {
   showAdminSections(false);
   try {
     reference = await api("list_reference");
+    Meals.configure(reference.identities, true);
     // renderReference also builds the new-registration form, so it runs once either way.
     if (isAdmin) renderReference();
     else renderNewRegistrationForm();
@@ -1008,6 +1042,94 @@ async function openStaff() {
   showAdminSections(isAdmin);
 }
 
+// 用餐身分: one price field per identity but 一般 (fee_amount); blank means unset, not the general price.
+function renderIdentityPrices(activity = {}) {
+  const container = document.querySelector("#identity-prices");
+  container.replaceChildren();
+  for (const identity of reference.identities ?? []) {
+    if (identity.code === "general") {
+      // 一般 can be renamed; its price field is fee_amount, already in the page.
+      document.querySelector("#general-price-name").textContent = identity.name;
+      document.querySelector('#activity-form [name="fee_amount"]').setAttribute("aria-label", `${identity.name}每人費用`);
+      continue;
+    }
+    const label = document.createElement("label");
+    label.className = "activity-price-row";
+    const name = document.createElement("span");
+    name.textContent = `${identity.name}${identity.is_active ? "" : "（已停用）"}`;
+    const input = document.createElement("input");
+    Object.assign(input, { type: "number", min: "0", step: "1", max: "2147483647", placeholder: "未設定" });
+    input.dataset.identityPrice = identity.code;
+    input.setAttribute("aria-label", `${identity.name}每人費用`);
+    input.value = activity.activity_identity_prices?.find((price) => price.identity_code === identity.code)?.fee_amount ?? "";
+    label.append(name, input);
+    container.append(label);
+  }
+}
+
+const identityPricesFrom = (form) => [...form.querySelectorAll("[data-identity-price]")]
+  .filter((input) => input.value !== "")
+  .map((input) => ({ identity_code: input.dataset.identityPrice, fee_amount: Number(input.value) }));
+
+// 一般 and 兒童 are reserved: they can be renamed only.
+const reservedIdentity = (code) => ["general", "child"].includes(code);
+
+function renderIdentities() {
+  const rows = document.querySelector("#identity-rows");
+  rows.replaceChildren();
+  for (const identity of reference.identities ?? []) {
+    const row = document.createElement("tr");
+    cell(row, identity.name);
+    cell(row, identity.is_active ? "啟用" : "停用");
+    cell(row, identity.public_selectable ? "是" : "僅後台");
+    editButton(row, () => {
+      const form = document.querySelector("#identity-form");
+      fillForm(form, identity);
+      form.elements.is_active.disabled = reservedIdentity(identity.code);
+      form.elements.public_selectable.disabled = reservedIdentity(identity.code);
+    });
+    if (!reservedIdentity(identity.code)) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "secondary";
+      remove.textContent = "刪除";
+      remove.addEventListener("click", () => {
+        if (confirm(`刪除身分「${identity.name}」？已使用的身分無法刪除。`)) saveIdentity("delete_identity", { code: identity.code });
+      });
+      row.lastElementChild.append(remove);
+    }
+    rows.append(row);
+  }
+}
+
+async function saveIdentity(kind, data) {
+  const activityForm = document.querySelector("#activity-form");
+  try {
+    await api("save_reference", { kind, data });
+    reference = await api("list_reference");
+    Meals.configure(reference.identities, true);
+    renderIdentities();
+    // Prices typed into an open activity form survive the redraw of its fields.
+    renderIdentityPrices({ activity_identity_prices: identityPricesFrom(activityForm) });
+    renderNewRegistrationForm();
+    document.querySelector("#identity-form").reset();
+    showMessage("身分已更新。");
+  } catch (error) { showMessage(error.message, true); }
+}
+
+document.querySelector("#identity-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const { elements } = event.currentTarget;
+  saveIdentity("identity", { code: elements.code.value, name: elements.name.value,
+    is_active: elements.is_active.checked, public_selectable: elements.public_selectable.checked });
+});
+document.querySelector("#identity-form").addEventListener("reset", (event) => {
+  const { elements } = event.currentTarget;
+  elements.code.value = "";
+  elements.is_active.disabled = false;
+  elements.public_selectable.disabled = false;
+});
+
 for (const [selector, kind] of [
   ["#settings-form", "settings"], ["#hosting-settings-form", "hosting"],
   ["#activity-form", "activity"], ["#program-form", "program"],
@@ -1017,7 +1139,7 @@ for (const [selector, kind] of [
   if (!["settings", "hosting"].includes(kind)) form.addEventListener("reset", () => {
     setEditing(form, null);
     // The activity being edited was left out of its own audience options; a new one may pick it.
-    if (kind === "activity") setAudienceOptions();
+    if (kind === "activity") { setAudienceOptions(); renderIdentityPrices(); }
   });
 }
 

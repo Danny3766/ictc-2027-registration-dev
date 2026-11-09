@@ -114,7 +114,7 @@ test("closed registration remains queryable by name and district and disables ed
   await expect(page.locator('#edit-form input[name="full_name"]')).toHaveCount(0);
   await expect(page.locator("#edit-form select")).toHaveCount(0);
   await expect(page.locator("#edit-form input:not([readonly]):not([disabled])")).toHaveCount(0);
-  await expect(page.locator("#edit-form").getByLabel("兒童")).not.toBeChecked();
+  await expect(page.locator("#edit-form").getByRole("checkbox", { name: "兒童", exact: true })).not.toBeChecked();
   await expect(page.getByRole("button", { name: "修改登記內容" })).toBeHidden();
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：參加");
   await expect(page.locator("#page-message")).toHaveText("目前只能查看，無法修改登記內容。");
@@ -943,12 +943,12 @@ test("a student-priced meal asks for the identity, required, and the success pag
   await page.locator('#registration-form input[name="full_name"]').fill("學生測試");
   await page.locator('#registration-form select[name="district_id"]').selectOption("1");
   await page.locator('#registration-form input[name="activity_1"][value="true"]').check();
-  // A meal without a student price does not ask.
+  // Any meal asks for a meal identity, including meals without a student price.
   await page.locator('#registration-form input[name="activity_3"][value="true"]').check();
-  await expect(identity).toBeHidden();
+  await expect(identity).toBeVisible();
   await page.locator('#registration-form input[name="activity_2"][value="true"]').check();
   await expect(identity).toBeVisible();
-  await expect(identity).toContainText("勾選的用餐有學生價，請選擇身分。");
+  await expect(identity).toContainText("請選擇用餐身分，作為活動費用的計算依據。");
   // It is the last part of the activity choices.
   expect(await page.locator("#activities > *").last().evaluate((element) => element.classList.contains("meal-identity"))).toBe(true);
   await page.getByRole("button", { name: "送出登記" }).click();
@@ -1077,7 +1077,7 @@ test("a sign-up from before a restriction is kept until the person saves another
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：一般");
 });
 
-test("an identity left from a removed student price is neither shown nor sent", async ({ page }) => {
+test("a meal identity remains visible after its student price is removed", async ({ page }) => {
   const requests = [];
   await page.route("**/functions/v1/registration", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: mealPage([{ ...studentDinner, student_fee_amount: null }]) });
@@ -1091,7 +1091,7 @@ test("an identity left from a removed student price is neither shown nor sent", 
   });
   await page.goto("/");
   await query(page);
-  await expect(page.locator("#edit-activities")).not.toContainText("用餐身分");
+  await expect(page.locator("#edit-activities")).toContainText("用餐身分");
   await page.getByRole("button", { name: "修改登記內容" }).click();
   const save = page.getByRole("button", { name: "儲存修改" });
   await expect(save).toBeDisabled();
@@ -1159,7 +1159,7 @@ test("a child skips both surveys, may join a hosting-only activity, and must giv
   });
   await page.goto("/");
   const form = page.locator("#registration-form");
-  const child = form.getByLabel("兒童");
+  const child = form.getByRole("checkbox", { name: "兒童", exact: true });
   const parent = form.locator('input[name="parent_name"]');
   // 兒童 sits right of 區 on a wide screen and on its own row on a phone.
   const boxes = () => form.locator(".identity-fields > label").evaluateAll((labels) =>
@@ -1213,9 +1213,9 @@ test("unticking 兒童 brings the surveys back and sends no parent name", async 
   });
   await page.goto("/");
   const form = page.locator("#registration-form");
-  await form.getByLabel("兒童").check();
+  await form.getByRole("checkbox", { name: "兒童", exact: true }).check();
   await form.locator('input[name="parent_name"]').fill("王爸爸");
-  await form.getByLabel("兒童").uncheck();
+  await form.getByRole("checkbox", { name: "兒童", exact: true }).uncheck();
   await expect(page.locator("#hosting-section")).toBeVisible();
   await expect(form.locator(".parent-name")).toBeHidden();
   await form.locator('input[name="full_name"]').fill("王大明");
@@ -1248,8 +1248,8 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
   const edit = page.locator("#edit-form");
   await expect(page.locator("#edit-full-name")).toHaveValue("測試登記");
   await expect(page.locator("#edit-district")).toHaveValue("測試區");
-  await expect(edit.getByLabel("兒童")).toBeChecked();
-  await expect(edit.getByLabel("兒童")).toBeDisabled();
+  await expect(edit.getByRole("checkbox", { name: "兒童", exact: true })).toBeChecked();
+  await expect(edit.getByRole("checkbox", { name: "兒童", exact: true })).toBeDisabled();
   await expect(edit.locator('input[name="parent_name"]')).toHaveValue("王爸爸");
   await expect(edit.locator('input[name="parent_name"]')).not.toBeEditable();
   await expect(page.locator("#edit-hosting-section")).toBeHidden();
@@ -1267,7 +1267,7 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
 
   // No longer a child: both surveys come back with 否 chosen, and the restricted activity locks.
   await page.getByRole("button", { name: "修改登記內容" }).click();
-  await edit.getByLabel("兒童").uncheck();
+  await edit.getByRole("checkbox", { name: "兒童", exact: true }).uncheck();
   await expect(page.locator("#edit-hosting-section")).toBeVisible();
   await expect(page.locator('#edit-hosting [name="hosting_status"][value="not_hosting"]')).toBeChecked();
   await expect(page.locator('#edit-pickup [name="pickup_status"][value="no"]')).toBeChecked();
@@ -1294,10 +1294,10 @@ test("an adult becoming a child must give the parent's name before saving", asyn
   await page.goto("/");
   await query(page);
   const edit = page.locator("#edit-form");
-  await expect(edit.getByLabel("兒童")).not.toBeChecked();
+  await expect(edit.getByRole("checkbox", { name: "兒童", exact: true })).not.toBeChecked();
   await expect(edit.locator(".parent-name")).toBeHidden();
   await page.getByRole("button", { name: "修改登記內容" }).click();
-  await edit.getByLabel("兒童").check();
+  await edit.getByRole("checkbox", { name: "兒童", exact: true }).check();
   await expect(page.locator("#edit-hosting-section")).toBeHidden();
   await expect(edit.locator(".parent-name")).toBeVisible();
   // An empty required name leaves 儲存修改 disabled; spaces alone pass the browser check but not ours.

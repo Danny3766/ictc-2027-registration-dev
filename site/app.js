@@ -26,6 +26,7 @@ let queriedChoicesBaseline = null;
 let queriedHostingBaseline = null;
 let queriedPickupBaseline = null;
 let queriedIdentityBaseline = null;
+let queriedStoredIdentity = null;
 // { is_child, parent_name } as saved; parent_name is null for anyone not a child.
 let queriedChildBaseline = null;
 // The edit form as it first appears. Opening it can already turn a restricted activity signed up
@@ -387,7 +388,7 @@ function beginEditing() {
   editMode = true;
   showEditChild();
   editActivities.innerHTML = activityFields(pageData.activities, choicesMap(queriedChoicesBaseline), false);
-  Meals.render(editActivities, pageData.activities, queriedIdentityBaseline);
+  Meals.render(editActivities, pageData.activities, queriedStoredIdentity);
   if (hostingOpen()) Hosting.render(editHosting, queriedHostingBaseline);
   if (pickupOpen()) Pickup.render(editPickup, queriedPickupBaseline);
   showHostingSummary();
@@ -439,6 +440,7 @@ function showEventNote(text) {
 async function loadPage() {
   try {
     pageData = await api();
+    Meals.configure(pageData.identities);
     document.querySelector("#event-name").textContent = pageData.settings.event_name;
     document.querySelector("#event-meta").textContent = [pageData.settings.venue, pageData.settings.address].filter(Boolean).join("｜");
     showEventNote(pageData.settings.event_note);
@@ -523,6 +525,7 @@ queryForm.addEventListener("submit", async (event) => {
   queriedHostingBaseline = null;
   queriedPickupBaseline = null;
   queriedIdentityBaseline = null;
+  queriedStoredIdentity = null;
   queriedChildBaseline = null;
   queriedCanChange = false;
   editMode = false;
@@ -538,7 +541,8 @@ queryForm.addEventListener("submit", async (event) => {
     queriedChoicesBaseline = sortedChoices(registration.choices);
     queriedHostingBaseline = Hosting.normalize(registration.hosting);
     queriedPickupBaseline = Pickup.normalize(registration.pickup);
-    // An identity left over from a removed student price is neither shown nor kept.
+    // The stored identity stays an option when editing; it is shown only while a meal is attended.
+    queriedStoredIdentity = registration.meal_identity;
     queriedIdentityBaseline = Meals.identityFor(pageData.activities, queriedChoicesBaseline, registration.meal_identity);
     queriedCanChange = registration.can_change;
     editForm.hidden = false;
@@ -580,6 +584,9 @@ editForm.addEventListener("submit", async (event) => {
     queriedPickupBaseline = child.is_child ? Pickup.normalize({ status: "no", count: 0 }) : pickup;
     queriedChildBaseline = child;
     queriedIdentityBaseline = mealIdentity;
+    // As registration_meal_identity stores it: 兒童 for a child, a former child's 兒童 becomes 一般.
+    queriedStoredIdentity = child.is_child ? "child"
+      : mealIdentity ?? (queriedStoredIdentity === "child" ? "general" : queriedStoredIdentity);
     showConfirmation();
     showMessage("修改已儲存，以下為目前登記內容。");
   } catch (error) {

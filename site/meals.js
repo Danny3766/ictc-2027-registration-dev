@@ -1,8 +1,19 @@
-// 用餐身分（學生價）、報名對象，以及活動的時間、費用與地圖連結文字, shared by the public page and the
+// 用餐身分與自訂價格、報名對象，以及活動的時間、費用與地圖連結文字, shared by the public page and the
 // back office. The database applies the same rules (registration_meal_identity,
 // registration_audience_valid); this only keeps the form in step.
 const Meals = (() => {
-  const identityLabels = { general: "一般", student: "學生" };
+  const identityLabels = { general: "一般", student: "學生", child: "兒童" };
+  // Until configure() gets the list from the Edge Function (an older one sends none).
+  let identities = Object.entries(identityLabels).map(([code, name]) => ({ code, name, is_active: true, public_selectable: true }));
+  let staff = false;
+  // identityLabels is changed in place, since callers hold the object.
+  function configure(items, isStaff = false) {
+    if (!items) return;
+    identities = items;
+    staff = isStaff;
+    for (const key of Object.keys(identityLabels)) delete identityLabels[key];
+    for (const item of items) identityLabels[item.code] = item.name;
+  }
   const revertedNote = "不符報名對象，已改為不參加。";
   // 是 and 家人已登記開家接待 both count as a hosting household.
   const hostingStatuses = ["hosting", "family_registered"];
@@ -20,13 +31,31 @@ const Meals = (() => {
     return Boolean(prerequisite && prerequisite.is_published !== false
       && context.choices?.some((choice) => choice.activity_id === requiredId && choice.attending));
   };
-  // Without an answered identity the general price applies, like the back-office estimate.
-  const fee = (activity, identity) =>
-    (identity === "student" && hasStudentPrice(activity) ? activity.student_fee_amount : activity.fee_amount) ?? 0;
+  // A missing price is unknown, not free and never another identity's price.
+  const fee = (activity, identity) => {
+    if (identity === "general") return activity.fee_amount ?? null;
+    if (!identity) return null;
+    if (activity.activity_identity_prices) return activity.activity_identity_prices.find((price) => price.identity_code === identity)?.fee_amount ?? null;
+    return identity === "student" ? activity.student_fee_amount ?? null : null;
+  };
+  // Unset fees are left out of a total but counted, so the total can name what it lacks.
+  const addFees = (values) => values.reduce((total, value) => value == null
+    ? { ...total, missing: total.missing + 1 }
+    : { ...total, sum: total.sum + value, known: total.known + 1 }, { sum: 0, known: 0, missing: 0 });
   const needsIdentity = (activities, choices) => choices.some((choice) => choice.attending
-    && activities.some((activity) => activity.id === choice.activity_id && hasStudentPrice(activity)));
+    && activities.some((activity) => activity.id === choice.activity_id && activity.category === "meal" && activity.is_published !== false));
+  // Who may pick an identity anew: active ones, and staff also those not open to the public.
+  const selectable = (item) => item.is_active && (staff || item.public_selectable);
 
   function priceText(activity) {
+    if (activity.activity_identity_prices) {
+      // Prices of identities nobody can pick anew are left out; 一般 is named only beside another price.
+      const others = activity.activity_identity_prices
+        .filter((price) => identities.some((item) => item.code === price.identity_code && selectable(item)))
+        .map((price) => `${identityLabels[price.identity_code]} NT$${price.fee_amount}／人`);
+      if (activity.fee_amount == null) return others.join("，");
+      return [`${identityLabels.general} NT$${activity.fee_amount}／人`, ...others].join("，");
+    }
     const prices = [];
     if (activity.fee_amount != null) prices.push(`${hasStudentPrice(activity) ? "一般 " : ""}NT$${activity.fee_amount}／人`);
     if (hasStudentPrice(activity)) prices.push(`學生 NT$${activity.student_fee_amount}／人`);
@@ -74,7 +103,7 @@ const Meals = (() => {
       }
       wrapper.append(reverted);
     }
-    if (!activities.some(hasStudentPrice)) return;
+    if (!activities.some((activity) => activity.category === "meal")) return;
     const block = document.createElement("div");
     block.className = "activity meal-identity";
     block.hidden = true;
@@ -84,7 +113,9 @@ const Meals = (() => {
     options.className = "activity-options";
     options.setAttribute("role", "radiogroup");
     options.setAttribute("aria-label", "用餐身分");
-    for (const [value, text] of Object.entries(identityLabels)) {
+    // The stored identity stays an option even when stopped; child is shown only to a child by sync.
+    for (const { code: value, name: text } of identities.filter((item) => item.code === identity
+      || item.code === "child" || selectable(item))) {
       const option = document.createElement("label");
       const input = document.createElement("input");
       input.type = "radio";
@@ -96,14 +127,14 @@ const Meals = (() => {
     }
     const hint = document.createElement("p");
     hint.className = "hint";
-    hint.textContent = "勾選的用餐有學生價，請選擇身分。";
+    hint.textContent = "請選擇用餐身分，作為活動費用的計算依據。";
     block.append(title, options, hint);
     container.append(block);
   }
 
   // Applies the current audience answers: a restricted activity is
   // 不參加 and locked outside its audience, and the identity question shows, required, only while a
-  // student-priced activity is attended. Hidden or locked fields are disabled, so the form's own checks
+  // meal activity is attended. Hidden or locked fields are disabled, so the form's own checks
   // skip them; read choices with choices() below, since FormData leaves disabled fields out.
   // A 參加 reverted here comes back if the answer becomes eligible again on the same screen.
   function sync(container, activities, context = {}) {
@@ -137,7 +168,12 @@ const Meals = (() => {
     const needed = needsIdentity(activities, choices(container, activities));
     block.hidden = !needed;
     for (const input of block.querySelectorAll("input")) {
-      input.disabled = !needed;
+      // A child always has 兒童, an adult never.
+      const allowed = context.isChild ? input.value === "child" : input.value !== "child";
+      input.closest("label").hidden = !allowed;
+      if (!allowed) input.checked = false;
+      if (context.isChild && allowed) input.checked = true;
+      input.disabled = !needed || !allowed;
       input.required = needed;
     }
   }
@@ -147,12 +183,12 @@ const Meals = (() => {
     .map((activity) => ({ activity_id: activity.id, attending: choiceOf(container, activity) }))
     .filter((choice) => choice.attending !== null);
 
-  // null while the question is hidden: no student-priced activity is attended.
+  // null while the question is hidden: no meal activity is attended.
   const readIdentity = (container) =>
     container.querySelector('[name="meal_identity"]:checked:not(:disabled)')?.value ?? null;
 
-  // A stored identity counts only while the choices still need one: after an admin removes a student
-  // price or unpublishes the meal, the old value stays in the database until the next save.
+  // A stored identity counts only while a published meal is attended; otherwise it is kept, unshown,
+  // for a later edit.
   const identityFor = (activities, choices, identity) =>
     identity && needsIdentity(activities, choices) ? identity : null;
 
@@ -192,7 +228,7 @@ const Meals = (() => {
   const revertedCount = (container) => container.querySelectorAll("input[data-reverted]").length;
 
   return {
-    identityLabels, hasStudentPrice, eligible, fee, needsIdentity, identityFor, priceText, feeText, mapUrl, activityTime,
+    configure, identityLabels, hasStudentPrice, eligible, fee, addFees, needsIdentity, identityFor, priceText, feeText, mapUrl, activityTime,
     render, sync, choices, readIdentity, revertedCount,
   };
 })();

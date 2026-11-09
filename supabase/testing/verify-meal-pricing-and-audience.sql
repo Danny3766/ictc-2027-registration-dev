@@ -1,6 +1,8 @@
 -- 用餐學生價、用餐身分與報名對象（202611050006）的資料庫驗證。
 -- 在測試專案 SQL Editor 執行；需要一位已改過初始密碼的有效管理員。整個驗證交易最後回滾，
 -- 暫時開放的設定、建立的活動與登記都不會留下。活動名稱與金額都是虛構的，不代表實際價格或成本。
+-- 只適用於套用 202611090002_registration_identities.sql 之前：之後沒參加用餐時保留身分、每個用餐都要身分，
+-- 本腳本會在 IDENTITY_KEPT_WITHOUT_MEAL 失敗。之後改用 verify-registration-identities.sql。
 begin;
 
 do $$

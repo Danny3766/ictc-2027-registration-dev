@@ -47,9 +47,9 @@ function mealResponse(error) {
 }
 let createClient;
 
-// Left out (or null) means no answer; anything else must be one of the two codes.
+// Left out (or null) means no answer; code syntax is checked here; the database checks existence and eligibility.
 export function validMealIdentity(value) {
-  return value === undefined || value === null || value === "general" || value === "student";
+  return value === undefined || value === null || (typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value));
 }
 
 // Left out, null or false: not a child (a saved registration keeps what it has when left out).
@@ -122,18 +122,19 @@ export async function handler(request) {
   });
 
   if (request.method === "GET") {
-    const [settings, districts, activities, program] = await Promise.all([
+    const [settings, districts, activities, program, identities] = await Promise.all([
       database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description").single(),
       database.from("districts").select("id,name").order("sort_order"),
-      database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,audience,audience_note").eq("is_published", true).order("sort_order"),
+      database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),audience,audience_note").eq("is_published", true).order("sort_order"),
       database.from("program_items").select("event_date,start_time,end_time,title,note").eq("is_visible", true).order("sort_order"),
+      database.from("registration_identities").select("code,name,is_active,public_selectable").order("sort_order"),
     ]);
-    const failed = [settings, districts, activities, program].find((result) => result.error);
+    const failed = [settings, districts, activities, program, identities].find((result) => result.error);
     if (failed?.error) {
       console.error(failed.error.message);
       return response({ error: "無法載入登記資料" }, 503);
     }
-    return response({ settings: settings.data, districts: districts.data, activities: activities.data, program: program.data });
+    return response({ settings: settings.data, districts: districts.data, activities: activities.data, program: program.data, identities: identities.data });
   }
 
   let body;

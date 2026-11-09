@@ -40,9 +40,9 @@ test("only Auth's weak_password code counts as a weak password", () => {
   assert.equal(isWeakPassword(null), false);
 });
 
-test("a meal identity is left out, null, or one of the two codes", () => {
-  for (const value of [undefined, null, "general", "student"]) assert.equal(validMealIdentity(value), true);
-  for (const value of ["", "Student", "teacher", 1, true, {}, ["student"]]) assert.equal(validMealIdentity(value), false);
+test("a meal identity is left out, null, or a well-formed code; the database checks that it exists", () => {
+  for (const value of [undefined, null, "general", "student", "child", "identity_0a1b", "a".repeat(64)]) assert.equal(validMealIdentity(value), true);
+  for (const value of ["", "Student", "bad code", "a".repeat(65), 1, true, {}, ["student"]]) assert.equal(validMealIdentity(value), false);
 });
 
 test("the registration list's district filter is left out, null, or a positive integer id", () => {
