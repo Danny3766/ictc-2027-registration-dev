@@ -14,8 +14,8 @@ let count = 0;
 let search = "";
 // The 區 filter's district id as the select gives it; "" means every district.
 let district = "";
-// The 兒童 filter: true lists children only.
-let childOnly = false;
+// The 兒童 filter as the select gives it: "" everyone, "all" every child, or a child_type.
+let childOnly = "";
 let visibleRegistrations = [];
 let selectedRegistration;
 let editingRegistration = false;
@@ -160,7 +160,7 @@ function clearSession() {
   document.querySelector("#new-registration-form").reset();
   // The list's conditions belong to this login too.
   document.querySelector("#search-form").reset();
-  [page, search, district, childOnly] = [0, "", "", false];
+  [page, search, district, childOnly] = [0, "", "", ""];
   document.querySelector("#clear-search").disabled = true;
   for (const selector of ["#registration-rows", "#staff-rows"]) {
     document.querySelector(selector).replaceChildren();
@@ -231,6 +231,21 @@ function cell(row, value) {
   item.textContent = String(value ?? "");
   row.append(item);
   return item;
+}
+
+// 兒童類型: the label for the list badge and the registration CSV, "" for anyone not a child.
+const childLabel = (type) => ({ preschool: "學齡前", elementary: "國小" })[type] ?? "";
+function childrenSummary(people) {
+  const preschool = people.filter((person) => person.child_type === "preschool").length;
+  const elementary = people.filter((person) => person.child_type === "elementary").length;
+  return `${preschool + elementary}（學齡前 ${preschool}、國小 ${elementary}）`;
+}
+function appendChildBadge(container, type) {
+  if (!childLabel(type)) return;
+  const badge = document.createElement("span");
+  badge.className = `child-badge ${type}`;
+  badge.textContent = childLabel(type);
+  container.append(badge);
 }
 
 function taipeiInput(value) {
@@ -494,7 +509,7 @@ async function saveReference(event, kind) {
 
 async function loadRegistrations() {
   const result = await api("list_registrations", { page, search, ...(district && { district_id: Number(district) }),
-    ...(childOnly && { children_only: true }) });
+    ...(childOnly && { children_only: true }), ...(["preschool", "elementary"].includes(childOnly) && { child_type: childOnly }) });
   count = result.count ?? 0;
   document.querySelector("#registration-count").textContent = `共 ${count} 筆`;
   document.querySelector("#page-number").textContent = `第 ${page + 1} 頁`;
@@ -507,7 +522,8 @@ async function loadRegistrations() {
   for (const registration of result.registrations) {
     const row = document.createElement("tr");
     cell(row, registration.serial_no);
-    cell(row, registration.full_name);
+    const nameCell = cell(row, registration.full_name);
+    appendChildBadge(nameCell, registration.child_type);
     cell(row, districtNames.get(registration.district_id));
     statusCell(row, "record", registration.record_status);
     statusCell(row, "import", registration.import_status);
@@ -587,7 +603,7 @@ async function showStatistics() {
     const students = Meals.hasStudentPrice(activity)
       ? attendees.filter((registration) => registration.meal_identity === "student").length : "—";
     const row = document.createElement("tr");
-    for (const value of [activity.title, attending, students, attendees.filter((registration) => registration.is_child).length, notAttending, unanswered, feeText(fee),
+    for (const value of [activity.title, attending, students, childrenSummary(attendees), notAttending, unanswered, feeText(fee),
       cost === null ? "—" : `NT$${cost}`, cost === null ? "—" : feeText(subsidy)]) cell(row, value);
     rows.append(row);
   }
@@ -606,23 +622,21 @@ async function showStatistics() {
   ].join("");
   const districtRows = document.querySelector("#district-stats-rows");
   districtRows.replaceChildren();
-  const districtTotal = { people: 0, children: 0, attendances: [] };
+  const districtTotal = { people: [], attendances: [] };
   // A 全會所 card, then one per district; no 合計 row, since adding activities would count a person twice.
   const districtCards = [districtActivityCard({ name: "全會所" }, registrations, activities)];
   for (const district of reference.districts) {
     const people = registrations.filter((item) => item.district_id === district.id);
     const attendances = people.flatMap((person) => activities.filter((activity) => attends(person, activity))
       .map((activity) => [person, activity]));
-    const children = people.filter((person) => person.is_child).length;
-    districtTotal.people += people.length;
-    districtTotal.children += children;
+    districtTotal.people.push(...people);
     districtTotal.attendances.push(...attendances);
     const row = document.createElement("tr");
-    for (const value of [district.name, people.length, children, amountText(feeOf(attendances))]) cell(row, value);
+    for (const value of [district.name, people.length, childrenSummary(people), amountText(feeOf(attendances))]) cell(row, value);
     districtRows.append(row);
     districtCards.push(districtActivityCard(district, people, activities));
   }
-  totalRow(districtRows, [districtTotal.people, districtTotal.children, amountText(feeOf(districtTotal.attendances))]);
+  totalRow(districtRows, [districtTotal.people.length, childrenSummary(districtTotal.people), amountText(feeOf(districtTotal.attendances))]);
   document.querySelector("#district-activity-cards").replaceChildren(...districtCards);
   showHostingStatistics(registrations);
 }
@@ -760,7 +774,7 @@ async function downloadCsv() {
     const pickup = pickupOf(registration);
     rows.push([
       registration.serial_no, registration.full_name, districts.get(registration.district_id),
-      registration.is_child ? "是" : "", registration.parent_name ?? "",
+      childLabel(registration.child_type), registration.parent_name ?? "",
       label("import", registration.import_status),
       ...activities.map((item) => !choices.has(item.id) ? "未回覆" : choices.get(item.id) ? "參加" : "不參加"),
       hosting ? Hosting.statusLabels[hosting.status] : "未回覆",
@@ -808,7 +822,8 @@ function renderChoiceFields(container, choices = new Map(), requireAll = true, i
 // 兒童 (same rules as the public form): the surveys are not asked, since both are stored as 否, and the
 // parent's name is required at the bottom. editable is false while a record is only being viewed.
 function syncChildFields(form, editable = true) {
-  const child = form.elements.is_child.checked;
+  const child = Boolean(form.elements.child_type.value);
+  form.querySelector(".preschool-hint").hidden = form.elements.child_type.value !== "preschool";
   form.querySelector(".child-hint").hidden = !(child && editable);
   form.querySelector(".parent-name").hidden = !child;
   form.elements.parent_name.disabled = !child || !editable;
@@ -818,7 +833,7 @@ function syncChildFields(form, editable = true) {
 }
 // The parent's name to send: trimmed for a child, nothing otherwise; throws when a child has none.
 function parentNameFrom(form) {
-  if (!form.elements.is_child.checked) return null;
+  if (!form.elements.child_type.value) return null;
   const name = form.elements.parent_name.value.trim();
   if (!name) throw new Error("請填寫家長姓名");
   return name;
@@ -826,9 +841,11 @@ function parentNameFrom(form) {
 
 // Staff follow the same audience and identity rules as the public form.
 const checkedStatus = (selector) => document.querySelector(`${selector} [name="hosting_status"]:checked`)?.value ?? null;
+const childTypeOf = (selector) => document.querySelector(selector).elements.child_type.value;
 function syncNewMeals() {
+  const childType = childTypeOf("#new-registration-form");
   Meals.sync(document.querySelector("#new-registration-choices"), currentActivities(), {
-    isChild: document.querySelector("#new-registration-form").elements.is_child.checked,
+    isChild: Boolean(childType), childType,
     hostingStatus: checkedStatus("#new-registration-hosting"),
     pickupStatus: Pickup.read(document.querySelector("#new-registration-pickup"))?.status,
   });
@@ -836,8 +853,9 @@ function syncNewMeals() {
 function syncDetailMeals() {
   // Only while editing: sync would re-enable allowed choices and show what saving would change.
   if (!editingRegistration) return;
+  const childType = childTypeOf("#edit-registration-form");
   Meals.sync(document.querySelector("#detail-choices"), currentActivities(), {
-    isChild: document.querySelector("#edit-registration-form").elements.is_child.checked,
+    isChild: Boolean(childType), childType,
     hostingStatus: checkedStatus("#detail-hosting"),
     pickupStatus: Pickup.read(document.querySelector("#detail-pickup"))?.status,
   });
@@ -883,9 +901,10 @@ function openRegistration(registration, editing = false) {
   const detail = document.querySelector("#registration-detail");
   detail.hidden = false;
   document.querySelector("#detail-title").textContent = `登記 #${registration.serial_no}｜${registration.full_name}`;
+  appendChildBadge(document.querySelector("#detail-title"), registration.child_type);
   const form = document.querySelector("#edit-registration-form");
   form.elements.full_name.value = registration.full_name;
-  form.elements.is_child.checked = Boolean(registration.is_child);
+  form.elements.child_type.value = registration.child_type ?? "";
   form.elements.parent_name.value = registration.parent_name ?? "";
   const districts = form.elements.district_id;
   districts.replaceChildren();
@@ -950,10 +969,10 @@ function showParentChildren(registration) {
 // The list switches to a search for the child's serial number, so the record stays open after a save;
 // 清除條件 brings the full list back.
 async function openChildRegistration(serial) {
-  if (!await showRegistrations(0, String(serial), "", false)) return;
+  if (!await showRegistrations(0, String(serial), "", "")) return;
   searchForm.elements.search.value = String(serial);
   searchForm.elements.district_id.value = "";
-  searchForm.elements.children_only.checked = false;
+  searchForm.elements.children_only.value = "";
   updateClearSearch();
   const child = visibleRegistrations.find((item) => item.serial_no === serial);
   if (child) openRegistration(child);
@@ -1071,8 +1090,8 @@ const identityPricesFrom = (form) => [...form.querySelectorAll("[data-identity-p
   .filter((input) => input.value !== "")
   .map((input) => ({ identity_code: input.dataset.identityPrice, fee_amount: Number(input.value) }));
 
-// 一般 and 兒童 are reserved: they can be renamed only.
-const reservedIdentity = (code) => ["general", "child"].includes(code);
+// 一般 and both 兒童 identities are reserved: they can be renamed only.
+const reservedIdentity = (code) => ["general", "child", "preschool"].includes(code);
 
 function renderIdentities() {
   const rows = document.querySelector("#identity-rows");
@@ -1400,22 +1419,22 @@ const searchForm = document.querySelector("#search-form");
 function updateClearSearch() {
   document.querySelector("#clear-search").disabled = !search && !district && !childOnly
     && !searchForm.elements.search.value.trim() && !searchForm.elements.district_id.value
-    && !searchForm.elements.children_only.checked;
+    && !searchForm.elements.children_only.value;
 }
 searchForm.addEventListener("input", updateClearSearch);
 searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
   showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value,
-    searchForm.elements.children_only.checked);
+    searchForm.elements.children_only.value);
 });
 document.querySelector("#clear-search").addEventListener("click", async () => {
   const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value,
-    searchForm.elements.children_only.checked];
+    searchForm.elements.children_only.value];
   searchForm.reset();
   // A failed load keeps the conditions from before the click, in the fields as well as on the list.
-  if (!await showRegistrations(0, "", "", false) && session) {
+  if (!await showRegistrations(0, "", "", "") && session) {
     [searchForm.elements.search.value, searchForm.elements.district_id.value,
-      searchForm.elements.children_only.checked] = entered;
+      searchForm.elements.children_only.value] = entered;
     updateClearSearch();
   }
 });
@@ -1443,7 +1462,7 @@ document.querySelector("#edit-registration-form").addEventListener("submit", asy
       hosting: child ? null : Hosting.read(document.querySelector("#detail-hosting")),
       pickup: child ? null : Pickup.read(document.querySelector("#detail-pickup")),
       meal_identity: Meals.readIdentity(document.querySelector("#detail-choices")),
-      is_child: child, parent_name: parentName ?? undefined,
+      is_child: child, child_type: form.elements.child_type.value, parent_name: parentName ?? undefined,
     });
     await refreshRegistration();
     // Back in view mode the save button is hidden; focus the way back into editing.
@@ -1488,7 +1507,7 @@ document.querySelector("#new-registration-form").addEventListener("submit", asyn
       hosting: child ? null : Hosting.read(document.querySelector("#new-registration-hosting")),
       pickup: child ? null : Pickup.read(document.querySelector("#new-registration-pickup")),
       meal_identity: Meals.readIdentity(document.querySelector("#new-registration-choices")),
-      is_child: child, parent_name: parentName ?? undefined,
+      is_child: child, child_type: form.elements.child_type.value, parent_name: parentName ?? undefined,
     });
     newRegistrationRequestId = crypto.randomUUID();
     const notice = document.querySelector("#new-registration-code");

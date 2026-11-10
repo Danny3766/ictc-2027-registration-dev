@@ -219,3 +219,7 @@ tr.dragging .drag-handle { cursor: grabbing; }
 .activity-panel .meal-identity { grid-template-columns: minmax(0, 1fr) 12.25rem; }
 .activity-panel .meal-identity .activity-options { display: grid; grid-template-columns: 5.5rem 5.5rem; }
 .activity-panel .meal-identity label[hidden] { display: none; }
+
+.child-badge { display: inline-block; margin-left: .5em; padding: .15em .5em; border-radius: .4em; font-size: .85em; color: #253348; }
+.child-badge.preschool { background: #fce4ec; }
+.child-badge.elementary { background: #e1effe; }

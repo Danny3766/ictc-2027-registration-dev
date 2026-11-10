@@ -112,9 +112,9 @@ test("closed registration remains queryable by name and district and disables ed
   await expect(page.locator("#edit-full-name")).toHaveValue("測試登記");
   await expect(page.locator("#edit-district")).toHaveValue("測試區");
   await expect(page.locator('#edit-form input[name="full_name"]')).toHaveCount(0);
-  await expect(page.locator("#edit-form select")).toHaveCount(0);
+  await expect(page.locator("#edit-form select:not([disabled])")).toHaveCount(0);
   await expect(page.locator("#edit-form input:not([readonly]):not([disabled])")).toHaveCount(0);
-  await expect(page.locator("#edit-form").getByRole("checkbox", { name: "兒童", exact: true })).not.toBeChecked();
+  await expect(page.locator("#edit-form").getByRole("combobox", { name: "兒童", exact: true })).toHaveValue("");
   await expect(page.getByRole("button", { name: "修改登記內容" })).toBeHidden();
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：參加");
   await expect(page.locator("#page-message")).toHaveText("目前只能查看，無法修改登記內容。");
@@ -189,7 +189,7 @@ test("query is read-only until editing and returns to confirmation after saving"
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({
     action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    is_child: false, parent_name: null,
+    is_child: false, child_type: "", parent_name: null,
   });
   await expect(page.locator("#edit-form input[type=radio]")).toHaveCount(0);
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：不參加");
@@ -573,7 +573,7 @@ test("while hosting is closed, the lookup shows the answer read-only and saves a
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    is_child: false, parent_name: null });
+    is_child: false, child_type: "", parent_name: null });
 });
 
 test("a lookup without a hosting answer hides the section while hosting is closed", async ({ page }) => {
@@ -645,7 +645,7 @@ test("hosting closed during an edit keeps the activity edits and drops only the 
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    is_child: false, parent_name: null });
+    is_child: false, child_type: "", parent_name: null });
   await page.getByRole("tab", { name: "登記參加" }).click();
   await expect(page.locator("#hosting-section")).toBeHidden();
   await expect(page.locator('#hosting-fields input, #hosting-fields select')).toHaveCount(0);
@@ -767,7 +767,7 @@ test("hosting closed while answering it for the first time keeps activity edits 
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    is_child: false, parent_name: null });
+    is_child: false, child_type: "", parent_name: null });
 });
 
 test("a description sent while editing shows in the edit view and the registration tab", async ({ page }) => {
@@ -1072,7 +1072,7 @@ test("a sign-up from before a restriction is kept until the person saves another
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({
     action: "update", full_name: "測試登記", district_id: 1, meal_identity: "general",
-    choices: [{ activity_id: 1, attending: false }, { activity_id: 2, attending: true }], is_child: false, parent_name: null,
+    choices: [{ activity_id: 1, attending: false }, { activity_id: 2, attending: true }], is_child: false, child_type: "", parent_name: null,
   });
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：一般");
 });
@@ -1145,6 +1145,20 @@ test("link previews read the page description and never the test-site banner", a
 });
 
 // 兒童 (2026-11-09): both surveys open, so hiding them for a child is visible; activity 2 is for hosting households only.
+test("preschool selection shows the age and height rule and keeps the parent field required", async ({ page }) => {
+  await page.route("**/functions/v1/registration**", (route) => route.fulfill({ json: childPage() }));
+  await page.goto("/");
+  const form = page.locator("#registration-form");
+  await form.locator('[name="child_type"]').selectOption("preschool");
+  await expect(form.locator(".preschool-hint")).toHaveText("6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準");
+  await expect(form.locator(".preschool-hint")).toBeVisible();
+  await expect(form.locator(".parent-name")).toBeVisible();
+  await expect(page.locator("#hosting-section")).toBeHidden();
+  await form.locator('[name="child_type"]').selectOption("elementary");
+  await expect(form.locator(".preschool-hint")).toBeHidden();
+  await expect(form.locator(".parent-name")).toBeVisible();
+});
+
 const childPage = () => mealPage([
   { id: 1, title: "測試活動", audience: "all" },
   { id: 2, title: "接待家庭聚餐", audience: "hosting", audience_note: null },
@@ -1159,7 +1173,7 @@ test("a child skips both surveys, may join a hosting-only activity, and must giv
   });
   await page.goto("/");
   const form = page.locator("#registration-form");
-  const child = form.getByRole("checkbox", { name: "兒童", exact: true });
+  const child = form.getByRole("combobox", { name: "兒童", exact: true });
   const parent = form.locator('input[name="parent_name"]');
   // 兒童 sits right of 區 on a wide screen and on its own row on a phone.
   const boxes = () => form.locator(".identity-fields > label").evaluateAll((labels) =>
@@ -1175,7 +1189,7 @@ test("a child skips both surveys, may join a hosting-only activity, and must giv
   await expect(form.locator(".parent-name")).toBeHidden();
   await expect(form.locator('input[name="activity_2"][value="true"]')).toBeDisabled();
 
-  await child.check();
+  await child.selectOption("elementary");
   await expect(form.locator(".child-hint")).toHaveText("兒童報名請在表單最下方填寫家長姓名。");
   await expect(page.locator("#hosting-section")).toBeHidden();
   await expect(form.locator('input[name="activity_2"][value="true"]')).toBeEnabled();
@@ -1197,7 +1211,7 @@ test("a child skips both surveys, may join a hosting-only activity, and must giv
   await parent.fill(" 王爸爸 ");
   await page.getByRole("button", { name: "送出登記" }).click();
   await expect(page).toHaveURL(/success\.html$/);
-  expect(requests[0]).toMatchObject({ action: "create", full_name: "王小明", is_child: true, parent_name: "王爸爸",
+  expect(requests[0]).toMatchObject({ action: "create", full_name: "王小明", is_child: true, child_type: "elementary", parent_name: "王爸爸",
     choices: [{ activity_id: 1, attending: true }, { activity_id: 2, attending: true }] });
   expect(requests[0]).not.toHaveProperty("hosting");
   expect(requests[0]).not.toHaveProperty("pickup");
@@ -1213,9 +1227,9 @@ test("unticking 兒童 brings the surveys back and sends no parent name", async 
   });
   await page.goto("/");
   const form = page.locator("#registration-form");
-  await form.getByRole("checkbox", { name: "兒童", exact: true }).check();
+  await form.getByRole("combobox", { name: "兒童", exact: true }).selectOption("elementary");
   await form.locator('input[name="parent_name"]').fill("王爸爸");
-  await form.getByRole("checkbox", { name: "兒童", exact: true }).uncheck();
+  await form.getByRole("combobox", { name: "兒童", exact: true }).selectOption("");
   await expect(page.locator("#hosting-section")).toBeVisible();
   await expect(form.locator(".parent-name")).toBeHidden();
   await form.locator('input[name="full_name"]').fill("王大明");
@@ -1240,7 +1254,7 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
     requests.push(body);
     if (body.action === "query") return route.fulfill({ json: { ...queried(true),
       choices: [{ activity_id: 1, title: "測試活動", attending: true }, { activity_id: 2, title: "接待家庭聚餐", attending: true }],
-      hosting: { status: "not_hosting" }, pickup: { status: "no", count: 0 }, is_child: true, parent_name: "王爸爸" } });
+      hosting: { status: "not_hosting" }, pickup: { status: "no", count: 0 }, is_child: true, child_type: "elementary", parent_name: "王爸爸" } });
     return route.fulfill({ json: { success: true } });
   });
   await page.goto("/");
@@ -1248,8 +1262,8 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
   const edit = page.locator("#edit-form");
   await expect(page.locator("#edit-full-name")).toHaveValue("測試登記");
   await expect(page.locator("#edit-district")).toHaveValue("測試區");
-  await expect(edit.getByRole("checkbox", { name: "兒童", exact: true })).toBeChecked();
-  await expect(edit.getByRole("checkbox", { name: "兒童", exact: true })).toBeDisabled();
+  await expect(edit.getByRole("combobox", { name: "兒童", exact: true })).toHaveValue("elementary");
+  await expect(edit.getByRole("combobox", { name: "兒童", exact: true })).toBeDisabled();
   await expect(edit.locator('input[name="parent_name"]')).toHaveValue("王爸爸");
   await expect(edit.locator('input[name="parent_name"]')).not.toBeEditable();
   await expect(page.locator("#edit-hosting-section")).toBeHidden();
@@ -1260,21 +1274,21 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
   await expect(page.locator("#edit-hosting-section")).toBeHidden();
   await edit.locator('input[name="parent_name"]').fill("王媽媽");
   await page.getByRole("button", { name: "儲存修改" }).click();
-  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, parent_name: "王媽媽" });
+  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, child_type: "elementary", parent_name: "王媽媽" });
   expect(requests.at(-1)).not.toHaveProperty("hosting");
   expect(requests.at(-1)).not.toHaveProperty("pickup");
   await expect(edit.locator('input[name="parent_name"]')).toHaveValue("王媽媽");
 
   // No longer a child: both surveys come back with 否 chosen, and the restricted activity locks.
   await page.getByRole("button", { name: "修改登記內容" }).click();
-  await edit.getByRole("checkbox", { name: "兒童", exact: true }).uncheck();
+  await edit.getByRole("combobox", { name: "兒童", exact: true }).selectOption("");
   await expect(page.locator("#edit-hosting-section")).toBeVisible();
   await expect(page.locator('#edit-hosting [name="hosting_status"][value="not_hosting"]')).toBeChecked();
   await expect(page.locator('#edit-pickup [name="pickup_status"][value="no"]')).toBeChecked();
   await expect(edit.locator(".parent-name")).toBeHidden();
   await expect(edit.locator('input[name="activity_2"][value="false"]')).toBeChecked();
   await page.getByRole("button", { name: "儲存修改" }).click();
-  expect(requests.at(-1)).toMatchObject({ is_child: false, parent_name: null, pickup: { status: "no", count: 0 },
+  expect(requests.at(-1)).toMatchObject({ is_child: false, child_type: "", parent_name: null, pickup: { status: "no", count: 0 },
     choices: [{ activity_id: 1, attending: true }, { activity_id: 2, attending: false }] });
   expect(requests.at(-1).hosting.status).toBe("not_hosting");
 });
@@ -1288,16 +1302,16 @@ test("an adult becoming a child must give the parent's name before saving", asyn
     if (body.action === "query") return route.fulfill({ json: { ...queried(true),
       choices: [{ activity_id: 1, title: "測試活動", attending: true }, { activity_id: 2, title: "接待家庭聚餐", attending: false }],
       hosting: { status: "hosting", guest_type: "any", guest_count: 2 }, pickup: { status: "yes", count: 3 },
-      is_child: false, parent_name: null } });
+      is_child: false, child_type: "", parent_name: null } });
     return route.fulfill({ json: { success: true } });
   });
   await page.goto("/");
   await query(page);
   const edit = page.locator("#edit-form");
-  await expect(edit.getByRole("checkbox", { name: "兒童", exact: true })).not.toBeChecked();
+  await expect(edit.getByRole("combobox", { name: "兒童", exact: true })).toHaveValue("");
   await expect(edit.locator(".parent-name")).toBeHidden();
   await page.getByRole("button", { name: "修改登記內容" }).click();
-  await edit.getByRole("checkbox", { name: "兒童", exact: true }).check();
+  await edit.getByRole("combobox", { name: "兒童", exact: true }).selectOption("elementary");
   await expect(page.locator("#edit-hosting-section")).toBeHidden();
   await expect(edit.locator(".parent-name")).toBeVisible();
   // An empty required name leaves 儲存修改 disabled; spaces alone pass the browser check but not ours.
@@ -1308,7 +1322,7 @@ test("an adult becoming a child must give the parent's name before saving", asyn
   expect(requests.filter((body) => body.action === "update")).toHaveLength(0);
   await edit.locator('input[name="parent_name"]').fill("王爸爸");
   await page.getByRole("button", { name: "儲存修改" }).click();
-  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, parent_name: "王爸爸" });
+  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, child_type: "elementary", parent_name: "王爸爸" });
   expect(requests.at(-1)).not.toHaveProperty("hosting");
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   await expect(page.locator("#edit-hosting-section")).toBeHidden();

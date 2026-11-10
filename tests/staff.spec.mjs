@@ -513,7 +513,7 @@ test("statistics show one card per district, with its activities and a district 
   // A district nobody has signed up from still shows, with zeros.
   await expect(cards.nth(2).locator("h3")).toHaveText("測試二區 有效登記 0 人");
   await expect(cards.nth(2).locator("tbody tr").nth(0).locator("td")).toHaveText(["測試聚會", "0", "0", "0"]);
-  await expect(page.locator("#district-stats-rows tr.total td")).toHaveText(["合計", "2", "0", "—"]);
+  await expect(page.locator("#district-stats-rows tr.total td")).toHaveText(["合計", "2", "0（學齡前 0、國小 0）", "—"]);
 });
 
 test("voiding a registration requires a reason and sends it", async ({ page }) => {
@@ -1105,8 +1105,8 @@ test("statistics CSV includes the visible sections and omits the family hosting 
   const csv = await readFile(await file.path(), "utf8");
   expect(csv).toContain('"統計摘要"\r\n"有效登記 4 筆');
   expect(csv).toContain('"各活動"\r\n"活動","參加","其中學生","其中兒童","不參加","未回覆"');
-  expect(csv).toContain('"測試聚會","2","—","0","2","0","—","—","—"');
-  expect(csv).toContain('"各區"\r\n"區","有效登記","其中兒童","預估費用"\r\n"林森","4","0","—"\r\n"合計","4","0","—"');
+  expect(csv).toContain('"測試聚會","2","—","0（學齡前 0、國小 0）","2","0","—","—","—"');
+  expect(csv).toContain('"各區"\r\n"區","有效登記","其中兒童","預估費用"\r\n"林森","4","0（學齡前 0、國小 0）","—"\r\n"合計","4","0（學齡前 0、國小 0）","—"');
   expect(csv).toContain('"開家接待回覆"\r\n"回覆","登記數"\r\n"是","2"\r\n"否","0"\r\n"未回覆","1"\r\n"合計","4"\r\n"合計含未列出的接待回答。"');
   expect(csv).not.toContain("家人已登記開家接待");
   expect(csv).toContain('"接待對象"\r\n"接待對象","登記數","人數"');
@@ -1300,18 +1300,18 @@ test("statistics estimate fees by identity, with cost, subsidy and the sign-ups 
   const rows = page.locator("#stats-rows tr");
   // Fictional amounts. Unset fees are left out and counted: 乙 never answered the identity.
   // 午餐: 甲 student 70, 乙 left out; cost 2 × 150, subsidy over 甲 only: 150 − 70.
-  await expect(rows.nth(0).locator("td")).toHaveText(["測試限定午餐", "2", "1", "0", "2", "0",
+  await expect(rows.nth(0).locator("td")).toHaveText(["測試限定午餐", "2", "1", "0（學齡前 0、國小 0）", "2", "0",
     "NT$70（未回覆身分者未計入）", "NT$300", "NT$80（未回覆身分者未計入）"]);
-  await expect(rows.nth(1).locator("td")).toHaveText(["測試晚餐", "3", "1", "0", "1", "0", "NT$160（未回覆身分者未計入）", "—", "—"]);
+  await expect(rows.nth(1).locator("td")).toHaveText(["測試晚餐", "3", "1", "0（學齡前 0、國小 0）", "1", "0", "NT$160（未回覆身分者未計入）", "—", "—"]);
   // Nothing of the meeting's fee is set, so there is no sum to show.
-  await expect(rows.nth(2).locator("td")).toHaveText(["測試聚會", "1", "—", "0", "3", "0", "—", "—", "—"]);
+  await expect(rows.nth(2).locator("td")).toHaveText(["測試聚會", "1", "—", "0（學齡前 0、國小 0）", "3", "0", "—", "—", "—"]);
   // The free meeting needs no cost; only the charged dinner without one is named.
   // The summary shows plain amounts; 各活動 names what is left out.
   await expect(page.locator("#stats-summary")).toHaveText("有效登記 4 筆；預估費用 NT$230；預估成本 NT$300；"
     + "預估補貼 NT$80；測試晚餐尚未設定實際成本，未計入。"
     + "用餐身分未回覆 1 人。不符報名對象（限定前已報名）：測試限定午餐 1 人。");
   // The 合計 row matches the summary above, as a plain amount.
-  await expect(page.locator("#district-stats-rows tr td")).toHaveText(["林森", "4", "0", "NT$230", "合計", "4", "0", "NT$230"]);
+  await expect(page.locator("#district-stats-rows tr td")).toHaveText(["林森", "4", "0（學齡前 0、國小 0）", "NT$230", "合計", "4", "0（學齡前 0、國小 0）", "NT$230"]);
 });
 
 test("statistics CSV uses active registrations and published activities for the fee totals", async ({ page }, testInfo) => {
@@ -1335,8 +1335,8 @@ test("statistics CSV uses active registrations and published activities for the 
   await page.getByRole("button", { name: "下載統計 CSV" }).click();
   const csv = await readFile(await (await download).path(), "utf8");
   expect(csv).toContain('"有效登記 4 筆；預估費用 NT$230；預估成本 NT$300；預估補貼 NT$80；');
-  expect(csv).toContain('"測試限定午餐","2","1","0","2","0","NT$70（未回覆身分者未計入）","NT$300","NT$80（未回覆身分者未計入）"');
-  expect(csv).toContain('"測試晚餐","3","1","0","1","0","NT$160（未回覆身分者未計入）","—","—"');
+  expect(csv).toContain('"測試限定午餐","2","1","0（學齡前 0、國小 0）","2","0","NT$70（未回覆身分者未計入）","NT$300","NT$80（未回覆身分者未計入）"');
+  expect(csv).toContain('"測試晚餐","3","1","0（學齡前 0、國小 0）","1","0","NT$160（未回覆身分者未計入）","—","—"');
   expect(csv).not.toContain("未公開活動");
   await expect(page.locator("#stats-summary")).toContainText("有效登記 4 筆");
 });
@@ -1578,12 +1578,12 @@ test("admin forms and statistics are compact: fields share rows on wide screens 
 // 兒童 (2026-11-09): a parent with two children in the list, one of them in it too, and a child whose parent is not.
 const familyRow = (serial, name, extra = {}) => ({ id: `${serial}23e4567-e89b-42d3-a456-426614174000`.slice(-36), serial_no: serial,
   full_name: name, district_id: 1, record_status: "active", import_status: "pending", updated_at: "2026-11-09T00:00:00Z",
-  registration_choices: [{ activity_id: 1, attending: true }], is_child: false, parent_name: null, ...extra });
+  registration_choices: [{ activity_id: 1, attending: true }], is_child: false, child_type: "", parent_name: null, ...extra });
 const family = [
   familyRow(5, "王爸爸", { children: [{ serial_no: 3, full_name: "王大明" }, { serial_no: 4, full_name: "王小明" }], registration_hosting: { status: "hosting", guest_type: "any", guest_count: 2 } }),
-  familyRow(4, "王小明", { is_child: true, parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
-  familyRow(3, "王大明", { is_child: true, parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
-  familyRow(2, "李小華", { is_child: true, parent_name: "李媽媽", district_id: 2 }),
+  familyRow(4, "王小明", { is_child: true, child_type: "elementary", parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
+  familyRow(3, "王大明", { is_child: true, child_type: "elementary", parent_name: "王爸爸", registration_hosting: { status: "not_hosting" }, registration_pickup: { status: "no", count: 0 } }),
+  familyRow(2, "李小華", { is_child: true, child_type: "elementary", parent_name: "李媽媽", district_id: 2 }),
   familyRow(1, "陳弟兄", { children: [] }),
 ];
 const familyReference = { settings: { event_name: "測試", is_hosting_open: true, is_pickup_open: true },
@@ -1622,23 +1622,21 @@ test("the 兒童 condition lists children only, with 區 and paging, and 清除�
   });
   await login(page);
   const form = page.locator("#search-form");
-  const child = form.getByRole("checkbox", { name: "兒童", exact: true });
+  const child = form.getByRole("combobox", { name: "兒童", exact: true });
   const clear = page.getByRole("button", { name: "清除條件" });
   // 兒童 sits after 區, level with the boxes, on a wide screen.
   await expect(child).toBeVisible();
   if (page.viewportSize().width > 700) {
-    const [district, box, text] = await Promise.all([form.locator("select").boundingBox(), child.boundingBox(),
-      child.locator("xpath=..").evaluate((label) => { const range = document.createRange(); range.selectNodeContents(label.lastChild);
-        return range.getBoundingClientRect().toJSON(); })]);
+    const [district, box] = await Promise.all([form.locator('select[name="district_id"]').boundingBox(), child.boundingBox()]);
     expect(box.x).toBeGreaterThan(district.x + district.width);
     // The box and its text share one line, level with the 區 select.
-    for (const item of [box, text]) {
+    for (const item of [box]) {
       const middle = item.y + item.height / 2;
       expect(middle).toBeGreaterThan(district.y);
       expect(middle).toBeLessThan(district.y + district.height);
     }
   }
-  await child.check();
+  await child.selectOption("all");
   await expect(clear).toBeEnabled();
   await form.locator('select[name="district_id"]').selectOption({ label: "林森" });
   await page.getByRole("button", { name: "搜尋" }).click();
@@ -1649,11 +1647,14 @@ test("the 兒童 condition lists children only, with 區 and paging, and 清除�
     { action: "list_registrations", page: 0, search: "", district_id: 1, children_only: true },
     { action: "list_registrations", page: 1, search: "", district_id: 1, children_only: true },
   ]);
+  await child.selectOption("preschool");
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.at(-1).child_type).toBe("preschool");
   await clear.click();
-  await expect(child).not.toBeChecked();
+  await expect(child).toHaveValue("");
   await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
 
-  await child.check();
+  await child.selectOption("all");
   await page.getByRole("button", { name: "搜尋" }).click();
   await expect.poll(() => lists.at(-1).children_only).toBe(true);
   await page.getByRole("button", { name: "登出" }).click();
@@ -1661,7 +1662,7 @@ test("the 兒童 condition lists children only, with 區 and paging, and 清除�
   await page.locator('#login-form input[name="password"]').fill("test-password");
   await page.getByRole("button", { name: "登入" }).click();
   await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
-  await expect(child).not.toBeChecked();
+  await expect(child).toHaveValue("");
 });
 
 test("協助登記 for a child hides both surveys and requires the parent's name at the bottom", async ({ page }) => {
@@ -1671,7 +1672,7 @@ test("協助登記 for a child hides both surveys and requires the parent's name
   await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
   await expect(form.locator(".hosting-panel")).toBeVisible();
-  await form.getByRole("checkbox", { name: "兒童", exact: true }).check();
+  await form.getByRole("combobox", { name: "兒童", exact: true }).selectOption("elementary");
   await expect(form.locator(".hosting-panel")).toBeHidden();
   await expect(form.locator(".child-hint")).toHaveText("兒童報名請在表單最下方填寫家長姓名。");
   expect(await form.evaluate((element) => [...element.children].filter((item) => item.checkVisibility())
@@ -1688,9 +1689,9 @@ test("協助登記 for a child hides both surveys and requires the parent's name
   await form.locator('input[name="parent_name"]').fill(" 王爸爸 ");
   await page.getByRole("button", { name: "建立協助登記" }).click();
   await expect(page.locator("#message")).toHaveText("協助登記已建立。");
-  expect(created[0]).toMatchObject({ full_name: "王小美", is_child: true, parent_name: "王爸爸", hosting: null, pickup: null });
+  expect(created[0]).toMatchObject({ full_name: "王小美", is_child: true, child_type: "elementary", parent_name: "王爸爸", hosting: null, pickup: null });
   // The form starts over as an adult's.
-  await expect(form.getByRole("checkbox", { name: "兒童", exact: true })).not.toBeChecked();
+  await expect(form.getByRole("combobox", { name: "兒童", exact: true })).toHaveValue("");
   await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(form.locator(".parent-name")).toBeHidden();
 });
@@ -1723,18 +1724,18 @@ test("a parent's record lists the children by name, and a name opens that child'
   await page.getByRole("button", { name: "取消修改" }).click();
 
   // Search conditions applied before the click give way to the child's serial number.
-  await page.locator("#search-form select").selectOption({ label: "中山" });
-  await page.locator("#search-form").getByRole("checkbox", { name: "兒童", exact: true }).check();
+  await page.locator('#search-form select[name="district_id"]').selectOption({ label: "中山" });
+  await page.locator("#search-form").getByRole("combobox", { name: "兒童", exact: true }).selectOption("all");
   await page.getByRole("button", { name: "搜尋" }).click();
   await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "", district_id: 2, children_only: true });
   await children.getByRole("button", { name: "#4 王小明" }).click();
-  await expect(page.locator("#detail-title")).toHaveText("登記 #4｜王小明");
+  await expect(page.locator("#detail-title")).toHaveText("登記 #4｜王小明國小");
   expect(lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "4" });
   await expect(page.locator('#search-form input[name="search"]')).toHaveValue("4");
-  await expect(page.locator("#search-form select")).toHaveValue("");
-  await expect(page.locator("#search-form").getByRole("checkbox", { name: "兒童", exact: true })).not.toBeChecked();
+  await expect(page.locator('#search-form select[name="district_id"]')).toHaveValue("");
+  await expect(page.locator("#search-form").getByRole("combobox", { name: "兒童", exact: true })).toHaveValue("");
   await expect(page.locator("#registration-rows tr")).toHaveCount(1);
-  await expect(page.locator("#edit-registration-form").getByRole("checkbox", { name: "兒童", exact: true })).toBeChecked();
+  await expect(page.locator("#edit-registration-form").getByRole("combobox", { name: "兒童", exact: true })).toHaveValue("elementary");
   await expect(children).toBeHidden();
   // 清除條件 brings the full list back.
   await page.getByRole("button", { name: "清除條件" }).click();
@@ -1748,8 +1749,8 @@ test("a child's record shows the parent's name read-only and can be changed back
   await login(page);
   await page.locator("#registration-rows tr").nth(1).getByRole("button", { name: "查看／處理" }).click();
   const form = page.locator("#edit-registration-form");
-  await expect(form.getByRole("checkbox", { name: "兒童", exact: true })).toBeChecked();
-  await expect(form.getByRole("checkbox", { name: "兒童", exact: true })).toBeDisabled();
+  await expect(form.getByRole("combobox", { name: "兒童", exact: true })).toHaveValue("elementary");
+  await expect(form.getByRole("combobox", { name: "兒童", exact: true })).toBeDisabled();
   await expect(form.locator('input[name="parent_name"]')).toHaveValue("王爸爸");
   await expect(form.locator('input[name="parent_name"]')).toBeDisabled();
   await expect(form.locator(".hosting-panel")).toBeHidden();
@@ -1757,7 +1758,7 @@ test("a child's record shows the parent's name read-only and can be changed back
 
   await page.getByRole("button", { name: "修改登記資料" }).click();
   await expect(form.locator('input[name="parent_name"]')).toBeEditable();
-  await form.getByRole("checkbox", { name: "兒童", exact: true }).uncheck();
+  await form.getByRole("combobox", { name: "兒童", exact: true }).selectOption("");
   await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(form.locator('#detail-hosting [name="hosting_status"][value="not_hosting"]')).toBeChecked();
   await expect(form.locator(".parent-name")).toBeHidden();
@@ -1774,19 +1775,19 @@ test("statistics count children per district, and the registration CSV has 兒�
   await page.getByRole("button", { name: "更新統計" }).click();
   await expect(page.locator("#district-stats-rows").locator("xpath=..").locator("th")).toHaveText(["區", "有效登記", "其中兒童", "預估費用"]);
   await expect(page.locator("#district-stats-rows tr")).toHaveText([/林森\s*4\s*2/, /中山\s*1\s*1/, /合計\s*5\s*3/]);
-  await expect(page.locator("#stats-rows tr td").nth(3)).toHaveText("3");
+  await expect(page.locator("#stats-rows tr td").nth(3)).toHaveText("3（學齡前 0、國小 3）");
   test.skip(testInfo.project.name !== "desktop-chromium", "Downloads are checked once.");
   const stats = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載統計 CSV" }).click();
   const statsCsv = await readFile(await (await stats).path(), "utf8");
-  expect(statsCsv).toContain('"測試聚會","5","—","3","0","0"');
+  expect(statsCsv).toContain('"測試聚會","5","—","3（學齡前 0、國小 3）","0","0"');
   expect(statsCsv).toContain('"區","有效登記","其中兒童","預估費用"');
-  expect(statsCsv).toContain('"合計","5","3","—"');
+  expect(statsCsv).toContain('"合計","5","3（學齡前 0、國小 3）","—"');
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
   const csv = await readFile(await (await download).path(), "utf8");
   expect(csv).toContain('"流水號","姓名","區","兒童","家長姓名","匯入狀態"');
-  expect(csv).toContain('"4","王小明","林森","是","王爸爸"');
+  expect(csv).toContain('"4","王小明","林森","國小","王爸爸"');
   expect(csv).toContain('"5","王爸爸","林森","",""');
 });
 
@@ -1799,7 +1800,7 @@ test("meal identity options line up with the activity options, and 兒童 is aut
   const activity = await form.locator('[data-activity="2"] > label').first().boundingBox();
   const general = await form.locator(".meal-identity label").filter({ hasText: "一般" }).boundingBox();
   expect(Math.abs(activity.x - general.x)).toBeLessThan(2);
-  await form.getByRole("checkbox", { name: "兒童", exact: true }).check();
+  await form.getByRole("combobox", { name: "兒童", exact: true }).selectOption("elementary");
   await expect(form.locator('[name="meal_identity"][value="child"]')).toBeChecked();
   const child = await form.locator(".meal-identity label").filter({ hasText: "兒童" }).boundingBox();
   expect(Math.abs(activity.x - child.x)).toBeLessThan(2);

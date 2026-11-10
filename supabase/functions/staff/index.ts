@@ -43,11 +43,11 @@ export function validMealIdentity(value) {
   return value === undefined || value === null || (typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value));
 }
 
-// Same rule as the public registration function: left out, null or false is not a child (a saved
-// registration keeps what it has when left out); a child needs a parent name of 1～20 characters.
-export function validChild(isChild, parentName) {
-  if (isChild === undefined || isChild === null || isChild === false) return true;
-  if (isChild !== true || typeof parentName !== "string") return false;
+// Same rule as the public registration function: left out or null keeps the saved fields, "" is not a child, otherwise preschool or elementary;
+// a child needs a parent name of 1～20 characters.
+export function validChild(childType, parentName) {
+  if (childType === undefined || childType === null || childType === "") return true;
+  if (!["preschool", "elementary"].includes(childType) || typeof parentName !== "string") return false;
   const length = Array.from(parentName.trim()).length;
   return length >= 1 && length <= 20;
 }
@@ -190,10 +190,10 @@ export async function handler(request) {
       return response({ error: "INVALID_REQUEST" }, 400);
     }
     if (!validDistrictFilter(body.district_id)) return response({ error: "INVALID_REQUEST" }, 400);
-    // The 兒童 filter: left out lists everyone, true lists children only.
+    // The 兒童 filter: left out lists everyone, true lists children only, and child_type narrows them to one type.
     if (body.children_only !== undefined && body.children_only !== true) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
-      .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,registration_choices(activity_id,attending),meal_identity,is_child,parent_name,name_key,registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)",
+      .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,registration_choices(activity_id,attending),meal_identity,is_child,child_type,parent_name,name_key,registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)",
         beforeSerial === null ? { count: "exact" } : undefined)
       .order("serial_no", { ascending: false });
     // 10 rows a page, matching REGISTRATIONS_PER_PAGE in site/admin/staff.js.
@@ -206,6 +206,8 @@ export async function handler(request) {
         : query.ilike("name_key", `%${nameKey(body.search).replaceAll(/[%*,()]/g, "").replaceAll(/[\\_]/g, "\\$&")}%`);
     }
     if (body.district_id != null) query = query.eq("district_id", body.district_id);
+    if (body.child_type != null && !["preschool", "elementary"].includes(body.child_type)) return response({ error: "INVALID_REQUEST" }, 400);
+    if (body.child_type) query = query.eq("child_type", body.child_type);
     if (body.children_only) query = query.eq("is_child", true);
     const { data, count, error } = await query;
     if (error) {
@@ -255,15 +257,15 @@ export async function handler(request) {
   if (["save_registration", "set_import_status", "void_registration"].includes(body.action)) {
     if (!isUuid(body.registration_id)) return response({ error: "INVALID_REQUEST" }, 400);
     if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
-    if (!validChild(body.is_child, body.parent_name)) return response({ error: parentNameMessage }, 400);
+    if (!validChild(body.child_type, body.parent_name)) return response({ error: parentNameMessage }, 400);
     const operation = {
       save_registration: ["staff_update_registration_with_pickup", {
         p_registration_id: body.registration_id, p_full_name: body.full_name,
         p_district_id: body.district_id, p_choices: body.choices, p_hosting: body.hosting ?? null,
         p_meal_identity: body.meal_identity ?? null, p_pickup: body.pickup ?? null,
         // Left out keeps the stored child fields, so an older back-office page cannot clear them.
-        p_is_child: typeof body.is_child === "boolean" ? body.is_child : null,
-        p_parent_name: body.is_child === true ? body.parent_name : null,
+        p_child_type: body.child_type ?? null,
+        p_parent_name: body.child_type ? body.parent_name : null,
       }],
       set_import_status: ["staff_set_import_status", {
         p_registration_id: body.registration_id, p_status: body.status,
@@ -294,12 +296,12 @@ export async function handler(request) {
   if (body.action === "create_registration") {
     if (!isUuid(body.create_request_id)) return response({ error: "INVALID_REQUEST" }, 400);
     if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
-    if (!validChild(body.is_child, body.parent_name)) return response({ error: parentNameMessage }, 400);
+    if (!validChild(body.child_type, body.parent_name)) return response({ error: parentNameMessage }, 400);
     const { data, error } = await database.rpc("staff_create_registration_with_pickup", {
       p_actor: profile.auth_user_id, p_request_id: body.create_request_id,
       p_full_name: body.full_name, p_district_id: body.district_id, p_choices: body.choices,
       p_hosting: body.hosting ?? null, p_meal_identity: body.meal_identity ?? null, p_pickup: body.pickup ?? null,
-      p_is_child: body.is_child === true, p_parent_name: body.is_child === true ? body.parent_name : null,
+      p_child_type: body.child_type ?? "", p_parent_name: body.child_type ? body.parent_name : null,
     });
     if (!error && data?.length === 1) return response({ serial_no: data[0].serial_no }, 201);
     if (error?.message?.includes("DUPLICATE_REQUEST")) return response({ error: "此協助登記已建立，請重新整理名單確認" }, 409);

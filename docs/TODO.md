@@ -376,8 +376,26 @@ Q43 已確認。
 - [ ] 更新測試站前端，請弟兄們測試：兒童登記與家長姓名必填、兒童不顯示開家／接機、查詢修改切換兒童、協助登記與後台修改、親子欄、其中兒童與 CSV 欄位。
 - [ ] 弟兄們確認後，正式專案依同樣順序套用 migration、部署兩個 Edge Function。
 - [ ] PR `develop` → `main`，以 **Create a merge commit** 合併；部署後確認正式站的兒童勾選框與後台親子欄。不需關閉登記。
-- [ ] 測試站回饋：登記名單查詢條件加「兒童」、「親子」說明改暖灰底色、家長那列改「✓ #26 #29」、家長的登記列出兒童姓名並可點開。PR `feat/child-registration` → `develop` 後，測試專案先重新部署 `staff` Edge Function，再接著更新測試站前端；兩步之間舊版後台的「親子」欄會暫時顯示異常，更新後請弟兄們重新整理頁面。
-- [ ] 上線後在 LINE 群組公告：已經幫兒童登記的家庭，用「查詢或修改登記」勾選兒童並填家長姓名。
+- [ ] 測試站回饋：登記名單查詢條件加「兒童」、「親子」說明改暖灰底色、家長那列改「兒童：小明、小華」、家長的登記列出兒童姓名並可點開。PR `feat/child-registration` → `develop` 後，測試專案先重新部署 `staff` Edge Function，再接著更新測試站前端；兩步之間舊版後台的「親子」欄會暫時顯示異常，更新後請弟兄們重新整理頁面。
+- [ ] 上線後在 LINE 群組公告：已經幫兒童登記的家庭，用「查詢或修改登記」選擇兒童類型並填家長姓名。
+
+## 本次新增必要範圍：用餐身分管理
+
+規則見[用餐身分管理](用餐身分管理.md)。套用 migration 後每個用餐活動都要回答身分，舊版頁面不相容，所以正式站依[正式環境setup](正式環境setup.md) 9-3 先關閉登記再更新。本機已完成（commit `41a16b9`）。
+
+- [ ] 測試專案：確認已套用 `202611090001_child_registration.sql`，再依序套用 `202611090002_registration_identities.sql`、`202611090003_independent_identity_prices.sql`，執行 `verify-registration-identities.sql` 與 `verify-independent-identity-prices.sql`（只在測試專案）。
+- [ ] 測試專案：部署 `registration` 與 `staff` Edge Function，更新測試站前端，請弟兄們測試身分別管理、各身分價格與表單身分題。
+- [ ] 正式站：依 9-3 關閉登記，套用同兩支 migration，部署兩個 Edge Function 與前端，確認後重新開放登記。
+
+## 本次新增必要範圍：兒童類型
+
+決策見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-09 兒童類型：學齡前與國小」一節。已在 `feat/child-registration` 本機實作，和兒童報名、用餐身分管理一起上線。新增資料庫驗證 `supabase/testing/verify-child-type.sql`；測試站套用 migration 後須執行。
+
+- [x] 本機實作：`202611100001_child_type.sql` 新增 `child_type`（既有兒童回填國小）、保留身分 `preschool`、`child` 改名「兒童（國小）」、刪除保護改 before delete trigger、`registration_child_save` 與四個 wrapper 改收 `p_child_type`；`registration`、`staff` Edge Function 的 `validChild` 改收 `child_type`；四處表單兒童下拉與學齡前提示；後台名單篩選下拉、類型標籤、統計「其中兒童 N（學齡前 a、國小 b）」、CSV 兒童欄填類型。補資料庫驗證、Edge Function 單元測試與 Playwright。
+- [ ] 確認類型標籤色碼（學齡前粉色底、國小粉藍底）。
+- [ ] 測試專案：套用 migration、部署兩個 Edge Function、更新前端，請弟兄們測試。
+- [ ] 確定照目前設計上線後，移除前端多送的 `is_child`：`registration`、`staff` Edge Function 已改讀 `child_type`，不再讀請求裡的 `is_child`。要改的地方：`site/app.js` 的 `create` 請求，以及 `currentEditChild()` 展開進 `update` 請求的 `is_child`；`site/admin/staff.js` 的 `save_registration`、`create_registration` 請求；`tests/read-only.spec.mjs`、`tests/staff.spec.mjs` 比對請求內容的 `is_child`。查詢回應與後台名單仍用 `is_child`，不在此範圍。
+- [ ] 正式站：依 9-3 與用餐身分管理一起更新。
 
 - [x] 本機完成：`202611060003_revoke_default_api_grants.sql` 撤銷 Supabase 預設給 `anon`、`authenticated` 的資料表、序列與函式權限，只保留原本刻意開放的公開讀取，並停止新物件自動授權。在模擬 Supabase 預設權限的本機資料庫驗證：私有資料表匿名不可讀、函式匿名不可執行；四支 `supabase/testing` 驗證以 `service_role` 執行通過。
 - [x] 本機完成：`supabase/production/baseline_202611060003.sql` 依序串接 16 支 migration 成單一交易，與逐支執行比對結構、權限與初始資料完全一致。

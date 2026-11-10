@@ -27,7 +27,8 @@ label, fieldset { display: block; margin: 1rem 0; }
 /* 兒童 sits right of 區 on wide screens and takes its own row on phones, level with the boxes. */
 .child-check { grid-column: 1 / -1; display: flex; align-items: center; gap: .4rem; align-self: end; min-height: 2.75rem; margin-top: 0; }
 .child-check input { width: auto; min-height: auto; margin: 0; }
-.child-hint { margin-top: 0; }
+.child-check select { width: auto; margin-top: 0; }
+.preschool-hint, .child-hint { margin-top: 0; }
 input[readonly] { background: #eef3f0; }
 input, select, textarea, button { width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .65rem .75rem; border: 1px solid #9caaa3; border-radius: .5rem; font: inherit; }
 button, .button-link { border-color: #23624b; color: #fff; background: #23624b; font-weight: 700; cursor: pointer; }

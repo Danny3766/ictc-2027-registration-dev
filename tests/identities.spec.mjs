@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 const identities = [
   { code: "general", name: "一般", is_active: true, public_selectable: true },
   { code: "child", name: "兒童", is_active: true, public_selectable: true },
+  { code: "preschool", name: "兒童（學齡前）", is_active: true, public_selectable: true },
   { code: "volunteer", name: "志工", is_active: true, public_selectable: false },
   { code: "retired", name: "舊身分", is_active: false, public_selectable: true },
 ];
@@ -27,6 +28,11 @@ test("the public form hides staff-only and stopped identities, picks 兒童 for 
   await sync({ isChild: true });
   await expect(page.getByLabel("兒童", { exact: true })).toBeChecked();
   expect(await page.evaluate(() => Meals.readIdentity(document.querySelector("form")))).toBe("child");
+  await sync({ isChild: true, childType: "preschool" });
+  await expect(page.getByLabel("兒童（學齡前）", { exact: true })).toBeChecked();
+  expect(await page.evaluate(() => Meals.readIdentity(document.querySelector("form")))).toBe("preschool");
+  await sync({});
+  await expect(page.getByLabel("一般", { exact: true })).toBeChecked();
 
   // A registration that has the stopped identity still sees it, chosen.
   await page.evaluate(() => {

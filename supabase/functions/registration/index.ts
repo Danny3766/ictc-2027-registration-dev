@@ -52,11 +52,11 @@ export function validMealIdentity(value) {
   return value === undefined || value === null || (typeof value === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(value));
 }
 
-// Left out, null or false: not a child (a saved registration keeps what it has when left out).
+// Left out or null keeps the saved child fields on an update; "" is not a child; otherwise preschool or elementary.
 // A child needs a parent name of 1～20 characters after trimming, counted like the database's length().
-export function validChild(isChild, parentName) {
-  if (isChild === undefined || isChild === null || isChild === false) return true;
-  if (isChild !== true || typeof parentName !== "string") return false;
+export function validChild(childType, parentName) {
+  if (childType === undefined || childType === null || childType === "") return true;
+  if (!["preschool", "elementary"].includes(childType) || typeof parentName !== "string") return false;
   const length = Array.from(parentName.trim()).length;
   return length >= 1 && length <= 20;
 }
@@ -167,7 +167,7 @@ export async function handler(request) {
   }
   if (allowed !== true) return response({ error: "操作次數過多，請稍後再試" }, 429);
   if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
-  if (!validChild(body.is_child, body.parent_name)) return response({ error: parentNameMessage }, 400);
+  if (!validChild(body.child_type, body.parent_name)) return response({ error: parentNameMessage }, 400);
 
   if (action === "create") {
     // shortcut: Turnstile stays disabled for launch; verify body.turnstile_token here when enabled.
@@ -184,8 +184,8 @@ export async function handler(request) {
       p_hosting: body.hosting ?? null,
       p_pickup: body.pickup ?? null,
       p_meal_identity: body.meal_identity ?? null,
-      p_is_child: body.is_child === true,
-      p_parent_name: body.is_child === true ? body.parent_name : null,
+      p_child_type: body.child_type ?? "",
+      p_parent_name: body.child_type ? body.parent_name : null,
     });
     if (!error) return response({ success: true }, 201);
     const mealError = mealResponse(error);
@@ -244,7 +244,7 @@ export async function handler(request) {
       console.error("Failed to query registration child fields", child.error);
       return response({ error: "服務暫時無法使用" }, 503);
     }
-    return response({ ...data[0], pickup: pickup.data, is_child: child.data?.is_child === true,
+    return response({ ...data[0], pickup: pickup.data, is_child: child.data?.is_child === true, child_type: child.data?.child_type ?? null,
       parent_name: child.data?.parent_name ?? null });
   }
 
@@ -256,8 +256,8 @@ export async function handler(request) {
     p_pickup: body.pickup ?? null,
     p_meal_identity: body.meal_identity ?? null,
     // Left out keeps the stored child fields, so a page from before this release cannot clear them.
-    p_is_child: typeof body.is_child === "boolean" ? body.is_child : null,
-    p_parent_name: body.is_child === true ? body.parent_name : null,
+    p_child_type: body.child_type ?? null,
+    p_parent_name: body.child_type ? body.parent_name : null,
   });
   const mealError = mealResponse(error);
   if (mealError) return mealError;

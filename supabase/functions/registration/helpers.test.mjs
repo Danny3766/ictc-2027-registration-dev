@@ -26,13 +26,13 @@ test("a meal identity is left out, null, or a well-formed code; the database che
   for (const value of ["", "Student", "bad code", "a".repeat(65), 1, true, {}, ["student"]]) assert.equal(validMealIdentity(value), false);
 });
 
-test("a child needs a parent name of 1 to 20 characters; anything else about the flag is refused", () => {
-  for (const [isChild, parentName] of [[undefined, undefined], [null, "x"], [false, undefined], [false, ""],
-    [true, "王爸爸"], [true, "  Michael Chen Wang L  "], [true, "名".repeat(20)], [true, "𠀀".repeat(20)]]) {
-    assert.equal(validChild(isChild, parentName), true, String([isChild, parentName]));
+test("a child needs a parent name of 1 to 20 characters; any other child type is refused", () => {
+  for (const [childType, parentName] of [[undefined, undefined], [null, "x"], ["", undefined], ["", ""],
+    ["elementary", "王爸爸"], ["preschool", "  Michael Chen Wang L  "], ["elementary", "名".repeat(20)], ["elementary", "𠀀".repeat(20)]]) {
+    assert.equal(validChild(childType, parentName), true, String([childType, parentName]));
   }
-  for (const [isChild, parentName] of [[true, undefined], [true, null], [true, ""], [true, "   "],
-    [true, "名".repeat(21)], [true, 1], ["true", "王爸爸"], [1, "王爸爸"], [{}, "王爸爸"]]) {
-    assert.equal(validChild(isChild, parentName), false, String([isChild, parentName]));
+  for (const [childType, parentName] of [[true, "parent"], [false, "parent"], ["invalid", "parent"], ["preschool", ""], ["elementary", undefined], ["elementary", null], ["elementary", ""], ["elementary", "   "],
+    ["elementary", "名".repeat(21)], ["elementary", 1], ["true", "王爸爸"], [1, "王爸爸"], [{}, "王爸爸"]]) {
+    assert.equal(validChild(childType, parentName), false, String([childType, parentName]));
   }
 });

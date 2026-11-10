@@ -2,7 +2,7 @@
 // back office. The database applies the same rules (registration_meal_identity,
 // registration_audience_valid); this only keeps the form in step.
 const Meals = (() => {
-  const identityLabels = { general: "一般", student: "學生", child: "兒童" };
+  const identityLabels = { general: "一般", student: "學生", child: "兒童（國小）", preschool: "兒童（學齡前）" };
   // Until configure() gets the list from the Edge Function (an older one sends none).
   let identities = Object.entries(identityLabels).map(([code, name]) => ({ code, name, is_active: true, public_selectable: true }));
   let staff = false;
@@ -113,9 +113,9 @@ const Meals = (() => {
     options.className = "activity-options";
     options.setAttribute("role", "radiogroup");
     options.setAttribute("aria-label", "用餐身分");
-    // The stored identity stays an option even when stopped; child is shown only to a child by sync.
+    // The stored identity stays an option even when stopped; the two child identities are shown only to a child of that type by sync.
     for (const { code: value, name: text } of identities.filter((item) => item.code === identity
-      || item.code === "child" || selectable(item))) {
+      || ["child", "preschool"].includes(item.code) || selectable(item))) {
       const option = document.createElement("label");
       const input = document.createElement("input");
       input.type = "radio";
@@ -167,14 +167,21 @@ const Meals = (() => {
     if (!block) return;
     const needed = needsIdentity(activities, choices(container, activities));
     block.hidden = !needed;
+    const childCodes = ["child", "preschool"];
+    const childCode = context.childType === "preschool" ? "preschool" : "child";
+    const wasChild = childCodes.includes(block.querySelector("input:checked")?.value);
     for (const input of block.querySelectorAll("input")) {
-      // A child always has 兒童, an adult never.
-      const allowed = context.isChild ? input.value === "child" : input.value !== "child";
+      // A child always has the 兒童 identity of its type, an adult never; a former child falls back to 一般.
+      const allowed = context.isChild ? input.value === childCode : !childCodes.includes(input.value);
       input.closest("label").hidden = !allowed;
       if (!allowed) input.checked = false;
       if (context.isChild && allowed) input.checked = true;
       input.disabled = !needed || !allowed;
       input.required = needed;
+    }
+    if (!context.isChild && wasChild) {
+      const general = block.querySelector('input[value="general"]');
+      if (general) general.checked = true;
     }
   }
 
