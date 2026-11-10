@@ -2,6 +2,8 @@
 <html lang="zh-Hant">
   <head>
     <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' https://*.supabase.co; object-src 'none'; base-uri 'none'; form-action 'self'" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex, nofollow" />
     <title>2027 國際華語相調特會｜38 會所登記</title>
@@ -58,7 +60,7 @@
                 <option value="">請選擇</option>
               </select></label
             >
-            <label class="child-check">兒童<select name="child_type"><option value="">請選擇</option><option value="preschool">學齡前（6 歲以下）</option><option value="elementary">國小</option></select></label>
+            <label class="identity-select">身分別<select name="meal_identity" required><option value="">請選擇</option></select></label>
           </div>
           <p class="hint preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
           <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
@@ -102,7 +104,7 @@
           <div class="identity-fields with-child">
             <label>姓名<input id="edit-full-name" readonly /></label>
             <label>區<input id="edit-district" readonly /></label>
-            <label class="child-check">兒童<select name="child_type" disabled><option value="">請選擇</option><option value="preschool">學齡前（6 歲以下）</option><option value="elementary">國小</option></select></label>
+            <label class="identity-select">身分別<select name="meal_identity" required disabled><option value="">請選擇</option></select></label>
           </div>
           <p class="hint preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
           <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>

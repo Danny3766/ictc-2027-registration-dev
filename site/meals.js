@@ -83,9 +83,9 @@ const Meals = (() => {
     return value === undefined ? null : value === "true";
   };
 
-  // Adds the audience notes and the identity question to activity fields just rendered in container;
+  // Adds the audience notes to activity fields just rendered in container;
   // each activity's wrapper carries data-activity="<id>". All text is set as text, never as markup.
-  function render(container, activities, identity = null) {
+  function render(container, activities) {
     for (const activity of activities) {
       const wrapper = container.querySelector(`[data-activity="${activity.id}"]`);
       if (!wrapper || !activity.audience || activity.audience === "all") continue;
@@ -103,39 +103,10 @@ const Meals = (() => {
       }
       wrapper.append(reverted);
     }
-    if (!activities.some((activity) => activity.category === "meal")) return;
-    const block = document.createElement("div");
-    block.className = "activity meal-identity";
-    block.hidden = true;
-    const title = document.createElement("strong");
-    title.textContent = "用餐身分";
-    const options = document.createElement("div");
-    options.className = "activity-options";
-    options.setAttribute("role", "radiogroup");
-    options.setAttribute("aria-label", "用餐身分");
-    // The stored identity stays an option even when stopped; the two child identities are shown only to a child of that type by sync.
-    for (const { code: value, name: text } of identities.filter((item) => item.code === identity
-      || ["child", "preschool"].includes(item.code) || selectable(item))) {
-      const option = document.createElement("label");
-      const input = document.createElement("input");
-      input.type = "radio";
-      input.name = "meal_identity";
-      input.value = value;
-      input.checked = value === identity;
-      option.append(input, text);
-      options.append(option);
-    }
-    const hint = document.createElement("p");
-    hint.className = "hint";
-    hint.textContent = "請選擇用餐身分，作為活動費用的計算依據。";
-    block.append(title, options, hint);
-    container.append(block);
   }
 
-  // Applies the current audience answers: a restricted activity is
-  // 不參加 and locked outside its audience, and the identity question shows, required, only while a
-  // meal activity is attended. Hidden or locked fields are disabled, so the form's own checks
-  // skip them; read choices with choices() below, since FormData leaves disabled fields out.
+  // Restricted activities become 不參加 and locked outside their audience.
+  // Read choices() since FormData leaves disabled controls out.
   // A 參加 reverted here comes back if the answer becomes eligible again on the same screen.
   function sync(container, activities, context = {}) {
     // A prerequisite can appear after its dependent activity. Repeat until the choices settle.
@@ -163,26 +134,6 @@ const Meals = (() => {
       }
       if (!changed) break;
     }
-    const block = container.querySelector(".meal-identity");
-    if (!block) return;
-    const needed = needsIdentity(activities, choices(container, activities));
-    block.hidden = !needed;
-    const childCodes = ["child", "preschool"];
-    const childCode = context.childType === "preschool" ? "preschool" : "child";
-    const wasChild = childCodes.includes(block.querySelector("input:checked")?.value);
-    for (const input of block.querySelectorAll("input")) {
-      // A child always has the 兒童 identity of its type, an adult never; a former child falls back to 一般.
-      const allowed = context.isChild ? input.value === childCode : !childCodes.includes(input.value);
-      input.closest("label").hidden = !allowed;
-      if (!allowed) input.checked = false;
-      if (context.isChild && allowed) input.checked = true;
-      input.disabled = !needed || !allowed;
-      input.required = needed;
-    }
-    if (!context.isChild && wasChild) {
-      const general = block.querySelector('input[value="general"]');
-      if (general) general.checked = true;
-    }
   }
 
   // Answered activities only; an unanswered one is left out.
@@ -190,14 +141,32 @@ const Meals = (() => {
     .map((activity) => ({ activity_id: activity.id, attending: choiceOf(container, activity) }))
     .filter((choice) => choice.attending !== null);
 
-  // null while the question is hidden: no meal activity is attended.
-  const readIdentity = (container) =>
-    container.querySelector('[name="meal_identity"]:checked:not(:disabled)')?.value ?? null;
-
-  // A stored identity counts only while a published meal is attended; otherwise it is kept, unshown,
-  // for a later edit.
-  const identityFor = (activities, choices, identity) =>
-    identity && needsIdentity(activities, choices) ? identity : null;
+  // The form's 身分別; null while 請選擇.
+  const readIdentity = (form) => form.elements.meal_identity.value || null;
+  const childType = (identity) => identity === "preschool" ? "preschool" : identity === "child" ? "elementary" : "";
+  // 身分別 options: new picks follow selectable(); the stored identity stays even when stopped or staff-only.
+  function renderIdentity(select, stored = null) {
+    const current = stored ?? select.value;
+    select.replaceChildren(new Option("請選擇", ""));
+    for (const item of identities.filter((item) => item.code === current || selectable(item))) {
+      select.add(new Option(item.name, item.code));
+    }
+    select.value = current || "";
+  }
+  // The list's 身分別 filter: fixed order first, then custom ones; a stopped identity only while registrations use it.
+  function renderIdentityFilter(select, usedCodes = []) {
+    const current = select.value;
+    select.replaceChildren(new Option("全部身分", ""));
+    const add = (code) => {
+      const item = identities.find((item) => item.code === code);
+      if (item && (item.is_active || usedCodes.includes(code))) select.add(new Option(item.name + (item.is_active ? "" : "（已停用）"), code));
+    };
+    add("general"); add("student");
+    select.add(new Option("全部兒童", "all_children"));
+    add("child"); add("preschool");
+    for (const item of identities) if (!["general", "student", "child", "preschool"].includes(item.code)) add(item.code);
+    select.value = current;
+  }
 
   const taipeiDateTime = (value) => {
     if (!value) return null;
@@ -235,7 +204,7 @@ const Meals = (() => {
   const revertedCount = (container) => container.querySelectorAll("input[data-reverted]").length;
 
   return {
-    configure, identityLabels, hasStudentPrice, eligible, fee, addFees, needsIdentity, identityFor, priceText, feeText, mapUrl, activityTime,
+    configure, identityLabels, childType, renderIdentity, renderIdentityFilter, hasStudentPrice, eligible, fee, addFees, needsIdentity, priceText, feeText, mapUrl, activityTime,
     render, sync, choices, readIdentity, revertedCount,
   };
 })();

@@ -30,8 +30,8 @@ const lostAccessResponse = () => response({ error: "帳號權限已變更，請�
 
 // Same status codes as the public registration function.
 function mealResponse(error) {
-  if (error?.message?.includes("MEAL_IDENTITY_REQUIRED")) return response({ error: "請選擇用餐身分" }, 400);
-  if (error?.message?.includes("INVALID_MEAL_IDENTITY")) return response({ error: "請檢查用餐身分" }, 400);
+  if (error?.message?.includes("MEAL_IDENTITY_REQUIRED")) return response({ error: "請選擇身分別" }, 400);
+  if (error?.message?.includes("INVALID_MEAL_IDENTITY")) return response({ error: "請檢查身分別" }, 400);
   if (error?.message?.includes("AUDIENCE_RESTRICTED")) {
     return response({ error: "有活動不符合報名對象，請確認開家、接機與活動選擇" }, 400);
   }
@@ -45,6 +45,9 @@ export function validMealIdentity(value) {
 
 // Same rule as the public registration function: left out or null keeps the saved fields, "" is not a child, otherwise preschool or elementary;
 // a child needs a parent name of 1～20 characters.
+// The identity decides the child type: child is 國小, preschool 學齡前, anything else not a child.
+const childTypeOf = (identity) => identity === "preschool" ? "preschool" : identity === "child" ? "elementary" : "";
+
 export function validChild(childType, parentName) {
   if (childType === undefined || childType === null || childType === "") return true;
   if (!["preschool", "elementary"].includes(childType) || typeof parentName !== "string") return false;
@@ -105,6 +108,33 @@ function isUuid(value) {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
+export async function readRequestJson(request) {
+  const limit = 64_000;
+  if (Number(request.headers.get("content-length")) > limit) {
+    if (request.body) void request.body.cancel().catch(() => {});
+    throw new RangeError("REQUEST_TOO_LARGE");
+  }
+  const reader = request.body?.getReader();
+  if (!reader) throw new SyntaxError("Empty request body");
+  const bytes = new Uint8Array(limit);
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > limit - length) {
+        void reader.cancel().catch(() => {});
+        throw new RangeError("REQUEST_TOO_LARGE");
+      }
+      bytes.set(value, length);
+      length += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+}
+
 export async function handler(request) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
   if (request.method !== "POST") return response({ error: "METHOD_NOT_ALLOWED" }, 405);
@@ -132,10 +162,9 @@ export async function handler(request) {
 
   let body;
   try {
-    const raw = await request.text();
-    if (new TextEncoder().encode(raw).byteLength > 64_000) return response({ error: "REQUEST_TOO_LARGE" }, 413);
-    body = JSON.parse(raw);
-  } catch {
+    body = await readRequestJson(request);
+  } catch (error) {
+    if (error instanceof RangeError && error.message === "REQUEST_TOO_LARGE") return response({ error: "REQUEST_TOO_LARGE" }, 413);
     return response({ error: "INVALID_REQUEST" }, 400);
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return response({ error: "INVALID_REQUEST" }, 400);
@@ -208,6 +237,8 @@ export async function handler(request) {
     if (body.district_id != null) query = query.eq("district_id", body.district_id);
     if (body.child_type != null && !["preschool", "elementary"].includes(body.child_type)) return response({ error: "INVALID_REQUEST" }, 400);
     if (body.child_type) query = query.eq("child_type", body.child_type);
+    if (body.meal_identity != null && !validMealIdentity(body.meal_identity)) return response({ error: "INVALID_REQUEST" }, 400);
+    if (body.meal_identity) query = query.eq("meal_identity", body.meal_identity);
     if (body.children_only) query = query.eq("is_child", true);
     const { data, count, error } = await query;
     if (error) {
@@ -240,23 +271,25 @@ export async function handler(request) {
   }
 
   if (body.action === "list_reference") {
-    const [settings, districts, activities, program, identities] = await Promise.all([
+    const [settings, districts, activities, program, identities, usedIdentities] = await Promise.all([
       database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_lookup_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description").single(),
       database.from("districts").select("id,name,sort_order").order("sort_order"),
       database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),cost_amount,audience,audience_note,is_published,sort_order").order("sort_order"),
       database.from("program_items").select("id,event_date,start_time,end_time,title,note,sort_order,is_visible").order("sort_order"),
       database.from("registration_identities").select("code,name,is_active,public_selectable").order("sort_order"),
+      database.rpc("registration_used_identity_codes"),
     ]);
-    if ([settings, districts, activities, program, identities].some((item) => item.error)) {
-      console.error("Failed to load staff reference data", [settings, districts, activities, program, identities].map((item) => item.error));
+    if ([settings, districts, activities, program, identities, usedIdentities].some((item) => item.error)) {
+      console.error("Failed to load staff reference data", [settings, districts, activities, program, identities, usedIdentities].map((item) => item.error));
       return response({ error: "後台資料載入失敗" }, 503);
     }
-    return response({ settings: settings.data, districts: districts.data, activities: activities.data, program: program.data, identities: identities.data });
+    return response({ settings: settings.data, districts: districts.data, activities: activities.data, program: program.data, identities: identities.data, used_identity_codes: usedIdentities.data });
   }
 
   if (["save_registration", "set_import_status", "void_registration"].includes(body.action)) {
     if (!isUuid(body.registration_id)) return response({ error: "INVALID_REQUEST" }, 400);
-    if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
+    if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查身分別" }, 400);
+    if (body.meal_identity != null) body.child_type = childTypeOf(body.meal_identity);
     if (!validChild(body.child_type, body.parent_name)) return response({ error: parentNameMessage }, 400);
     const operation = {
       save_registration: ["staff_update_registration_with_pickup", {
@@ -295,7 +328,8 @@ export async function handler(request) {
 
   if (body.action === "create_registration") {
     if (!isUuid(body.create_request_id)) return response({ error: "INVALID_REQUEST" }, 400);
-    if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查用餐身分" }, 400);
+    if (!validMealIdentity(body.meal_identity)) return response({ error: "請檢查身分別" }, 400);
+    if (body.meal_identity != null) body.child_type = childTypeOf(body.meal_identity);
     if (!validChild(body.child_type, body.parent_name)) return response({ error: parentNameMessage }, 400);
     const { data, error } = await database.rpc("staff_create_registration_with_pickup", {
       p_actor: profile.auth_user_id, p_request_id: body.create_request_id,

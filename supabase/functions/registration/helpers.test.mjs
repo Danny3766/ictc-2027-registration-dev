@@ -1,6 +1,50 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clientIp, isUuid, sourceKey, validChild, validMealIdentity } from "./index.ts";
+import { readRequestJson, clientIp, isUuid, sourceKey, validChild, validMealIdentity } from "./index.ts";
+
+test("JSON bodies enforce the byte limit while reading", async () => {
+  const payload = '"' + "a".repeat(63_998) + '"';
+  const request = (body, headers = {}) => new Request("https://example.test", { method: "POST", body, headers });
+  assert.equal(await readRequestJson(request(payload)), "a".repeat(63_998));
+  assert.equal(await readRequestJson(request('"' + "名".repeat(21_332) + '"')), "名".repeat(21_332));
+  await assert.rejects(readRequestJson(request(payload + " ")), { message: "REQUEST_TOO_LARGE" });
+  await assert.rejects(readRequestJson(request(payload + " ", { "content-length": "1" })), { message: "REQUEST_TOO_LARGE" });
+  await assert.rejects(readRequestJson(request("{")), SyntaxError);
+  await assert.rejects(readRequestJson(new Request("https://example.test", { method: "POST" })), SyntaxError);
+});
+
+test("oversized bodies cancel the stream without consuming the rest", async () => {
+  for (const declaredLength of [undefined, "64001"]) {
+    let reads = 0;
+    let cancelled = false;
+    const body = new ReadableStream({
+      pull(controller) {
+        reads++;
+        controller.enqueue(new Uint8Array(32_001));
+      },
+      cancel() { cancelled = true; },
+    }, { highWaterMark: 0 });
+    const headers = declaredLength ? { "content-length": declaredLength } : {};
+    const request = new Request("https://example.test", { method: "POST", body, headers, duplex: "half" });
+    await assert.rejects(readRequestJson(request), { message: "REQUEST_TOO_LARGE" });
+    assert.equal(cancelled, true);
+    assert.equal(reads, declaredLength ? 0 : 2);
+    assert.equal(body.locked, false);
+  }
+});
+
+test("JSON decoding preserves UTF-8 characters split across chunks", async () => {
+  const bytes = new TextEncoder().encode('{"name":"名"}');
+  const body = new ReadableStream({
+    start(controller) {
+      for (const byte of bytes) controller.enqueue(new Uint8Array([byte]));
+      controller.close();
+    },
+  });
+  assert.deepEqual(await readRequestJson(new Request("https://example.test", {
+    method: "POST", body, duplex: "half",
+  })), { name: "名" });
+});
 
 test("request identifiers are validated", () => {
   assert.equal(isUuid("123e4567-e89b-42d3-a456-426614174000"), true);

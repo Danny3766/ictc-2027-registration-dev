@@ -14,7 +14,7 @@ const pickupFields = document.querySelector("#pickup-fields");
 const editHostingSection = document.querySelector("#edit-hosting-section");
 const editHosting = document.querySelector("#edit-hosting");
 const editPickup = document.querySelector("#edit-pickup");
-const editChildInput = editForm.elements.child_type;
+const editChildInput = editForm.elements.meal_identity;
 const editParentInput = editForm.elements.parent_name;
 const hostingClosedMessage = "開家接待調查已關閉，如需調整請聯絡服事者";
 const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
@@ -26,7 +26,6 @@ let queriedChoicesBaseline = null;
 let queriedHostingBaseline = null;
 let queriedPickupBaseline = null;
 let queriedIdentityBaseline = null;
-let queriedStoredIdentity = null;
 // { is_child, child_type, parent_name } as saved; child_type is "" and parent_name null for anyone not a child.
 let queriedChildBaseline = null;
 // The edit form as it first appears. Opening it can already turn a restricted activity signed up
@@ -201,18 +200,19 @@ function currentEditChoices() {
 
 const hostingOpen = () => Boolean(pageData?.settings.is_hosting_open);
 const pickupOpen = () => Boolean(pageData?.settings.is_pickup_open);
-const registrationChild = () => Boolean(registrationForm.elements.child_type.value);
-// While editing, the checkbox and the name as entered; otherwise the saved values.
+const registrationChild = () => Boolean(Meals.childType(registrationForm.elements.meal_identity.value));
+// Derive child fields from the single identity choice while editing.
 function currentEditChild() {
   if (!editMode) return queriedChildBaseline;
-  return { is_child: Boolean(editChildInput.value), child_type: editChildInput.value, parent_name: editChildInput.value ? editParentInput.value.trim() : null };
+  const type = Meals.childType(editChildInput.value);
+  return { is_child: Boolean(type), child_type: type, parent_name: type ? editParentInput.value.trim() : null };
 }
 const editingChild = () => Boolean(currentEditChild()?.is_child);
 
 // 兒童 answer neither survey (both are stored as 否) and give a parent's name at the bottom of the form.
 function showRegistrationChild() {
   const child = registrationChild();
-  registrationForm.querySelector(".preschool-hint").hidden = registrationForm.elements.child_type.value !== "preschool";
+  registrationForm.querySelector(".preschool-hint").hidden = Meals.childType(registrationForm.elements.meal_identity.value) !== "preschool";
   registrationForm.querySelector(".child-hint").hidden = !child;
   registrationForm.querySelector(".parent-name").hidden = !child;
   registrationForm.elements.parent_name.disabled = !child;
@@ -223,7 +223,7 @@ function showRegistrationChild() {
 // The lookup shows the saved child fields read-only until 修改登記內容.
 function showEditChild() {
   if (!editMode) {
-    editChildInput.value = queriedChildBaseline?.child_type ?? "";
+    Meals.renderIdentity(editChildInput, queriedIdentityBaseline);
     editParentInput.value = queriedChildBaseline?.parent_name ?? "";
   }
   const child = editingChild();
@@ -235,13 +235,13 @@ function showEditChild() {
   editParentInput.disabled = !child;
 }
 
-const currentEditIdentity = () => editMode ? Meals.readIdentity(editActivities) : queriedIdentityBaseline;
+const currentEditIdentity = () => editMode ? Meals.readIdentity(editForm) : queriedIdentityBaseline;
 const checkedHostingStatus = (container) => container.querySelector('[name="hosting_status"]:checked')?.value ?? null;
 
 // Restricted activities follow the current hosting, pickup and activity answers.
 function syncMeals() {
   Meals.sync(registrationForm, pageData.activities, {
-    isChild: registrationChild(), childType: registrationForm.elements.child_type.value,
+    isChild: registrationChild(), childType: Meals.childType(registrationForm.elements.meal_identity.value),
     hostingStatus: hostingOpen() ? checkedHostingStatus(hostingFields) : null,
     pickupStatus: pickupOpen() ? Pickup.read(pickupFields)?.status : null,
   });
@@ -371,10 +371,6 @@ function showHostingSummary() {
 function showConfirmation() {
   editMode = false;
   editActivities.innerHTML = activitySummaryFields(pageData.activities, choicesMap(queriedChoicesBaseline ?? []));
-  if (queriedIdentityBaseline) {
-    editActivities.insertAdjacentHTML("beforeend", `<div class="activity"><strong>用餐身分</strong>
-      <p class="activity-status">登記狀態：${escapeHtml(Meals.identityLabels[queriedIdentityBaseline])}</p></div>`);
-  }
   showEditChild();
   showHostingSummary();
   showHostingDescriptions();
@@ -390,7 +386,7 @@ function beginEditing() {
   editMode = true;
   showEditChild();
   editActivities.innerHTML = activityFields(pageData.activities, choicesMap(queriedChoicesBaseline), false);
-  Meals.render(editActivities, pageData.activities, queriedStoredIdentity);
+  Meals.render(editActivities, pageData.activities);
   if (hostingOpen()) Hosting.render(editHosting, queriedHostingBaseline);
   if (pickupOpen()) Pickup.render(editPickup, queriedPickupBaseline);
   showHostingSummary();
@@ -443,6 +439,7 @@ async function loadPage() {
   try {
     pageData = await api();
     Meals.configure(pageData.identities);
+    Meals.renderIdentity(registrationForm.elements.meal_identity);
     document.querySelector("#event-name").textContent = pageData.settings.event_name;
     document.querySelector("#event-meta").textContent = [pageData.settings.venue, pageData.settings.address].filter(Boolean).join("｜");
     showEventNote(pageData.settings.event_note);
@@ -489,9 +486,8 @@ registrationForm.addEventListener("submit", async (event) => {
       choices,
       hosting,
       pickup,
-      // Sent only when asked; the server treats a missing identity as no answer.
       meal_identity: mealIdentity ?? undefined,
-      is_child: child, child_type: registrationForm.elements.child_type.value,
+      is_child: child, child_type: Meals.childType(registrationForm.elements.meal_identity.value),
       parent_name: parentName ?? undefined,
       turnstile_token: null,
     });
@@ -506,7 +502,7 @@ registrationForm.addEventListener("submit", async (event) => {
       })),
       hosting: hosting ? `開家接待：${Hosting.summary(hosting)}` : null,
       pickup: pickup ? `接機接待：${Pickup.summary(pickup)}` : null,
-      meal_identity: mealIdentity ? `用餐身分：${Meals.identityLabels[mealIdentity]}` : null,
+      meal_identity: mealIdentity ? `身分別：${Meals.identityLabels[mealIdentity]}` : null,
     }));
     location.assign("./success.html");
   } catch (error) {
@@ -527,7 +523,6 @@ queryForm.addEventListener("submit", async (event) => {
   queriedHostingBaseline = null;
   queriedPickupBaseline = null;
   queriedIdentityBaseline = null;
-  queriedStoredIdentity = null;
   queriedChildBaseline = null;
   queriedCanChange = false;
   editMode = false;
@@ -543,9 +538,9 @@ queryForm.addEventListener("submit", async (event) => {
     queriedChoicesBaseline = sortedChoices(registration.choices);
     queriedHostingBaseline = Hosting.normalize(registration.hosting);
     queriedPickupBaseline = Pickup.normalize(registration.pickup);
-    // The stored identity stays an option when editing; it is shown only while a meal is attended.
-    queriedStoredIdentity = registration.meal_identity;
-    queriedIdentityBaseline = Meals.identityFor(pageData.activities, queriedChoicesBaseline, registration.meal_identity);
+    // The saved identity stays an option even when no longer publicly selectable.
+    queriedIdentityBaseline = registration.meal_identity
+      ?? (registration.child_type === "preschool" ? "preschool" : registration.is_child ? "child" : "general");
     queriedCanChange = registration.can_change;
     editForm.hidden = false;
     showConfirmation();
@@ -586,9 +581,6 @@ editForm.addEventListener("submit", async (event) => {
     queriedPickupBaseline = child.is_child ? Pickup.normalize({ status: "no", count: 0 }) : pickup;
     queriedChildBaseline = child;
     queriedIdentityBaseline = mealIdentity;
-    // As registration_meal_identity stores it: 兒童 for a child, a former child's 兒童 becomes 一般.
-    queriedStoredIdentity = child.is_child ? (child.child_type === "preschool" ? "preschool" : "child")
-      : mealIdentity ?? (["child", "preschool"].includes(queriedStoredIdentity) ? "general" : queriedStoredIdentity);
     showConfirmation();
     showMessage("修改已儲存，以下為目前登記內容。");
   } catch (error) {

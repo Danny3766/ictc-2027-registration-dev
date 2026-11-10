@@ -50,3 +50,6 @@ test-results/
 # Local-only acceptance checks with replayable requests
 tests/*.manual.spec.mjs
 tests/rls.spec.mjs
+
+# Local-only notes with unpatched security details (see docs/GitHub公開內容機敏資料審查準則.md)
+docs/*.local.md

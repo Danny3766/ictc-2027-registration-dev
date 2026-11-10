@@ -14,8 +14,8 @@ let count = 0;
 let search = "";
 // The 區 filter's district id as the select gives it; "" means every district.
 let district = "";
-// The 兒童 filter as the select gives it: "" everyone, "all" every child, or a child_type.
-let childOnly = "";
+// Empty means everyone; all_children groups both child identities; other values are identity codes.
+let identityFilter = "";
 let visibleRegistrations = [];
 let selectedRegistration;
 let editingRegistration = false;
@@ -160,7 +160,7 @@ function clearSession() {
   document.querySelector("#new-registration-form").reset();
   // The list's conditions belong to this login too.
   document.querySelector("#search-form").reset();
-  [page, search, district, childOnly] = [0, "", "", ""];
+  [page, search, district, identityFilter] = [0, "", "", ""];
   document.querySelector("#clear-search").disabled = true;
   for (const selector of ["#registration-rows", "#staff-rows"]) {
     document.querySelector(selector).replaceChildren();
@@ -235,17 +235,48 @@ function cell(row, value) {
 
 // 兒童類型: the label for the list badge and the registration CSV, "" for anyone not a child.
 const childLabel = (type) => ({ preschool: "學齡前", elementary: "國小" })[type] ?? "";
-function childrenSummary(people) {
-  const preschool = people.filter((person) => person.child_type === "preschool").length;
-  const elementary = people.filter((person) => person.child_type === "elementary").length;
-  return `${preschool + elementary}（學齡前 ${preschool}、國小 ${elementary}）`;
-}
 function appendChildBadge(container, type) {
   if (!childLabel(type)) return;
   const badge = document.createElement("span");
   badge.className = `child-badge ${type}`;
   badge.textContent = childLabel(type);
   container.append(badge);
+}
+
+function appendIdentityBadge(container, registration) {
+  if (registration.meal_identity !== "student") return appendChildBadge(container, registration.child_type);
+  const badge = document.createElement("span");
+  badge.className = "child-badge student";
+  badge.textContent = Meals.identityLabels.student ?? "學生";
+  container.append(badge);
+}
+// 其中兒童: the total on top, a badge per child type with anyone in it below; the CSV gets "3（國小 3）".
+function childrenCell(row, people) {
+  const counts = [["preschool", "學齡前"], ["elementary", "國小"]]
+    .map(([type, label]) => ({ type, label, count: people.filter((person) => person.child_type === type).length }));
+  const total = counts.reduce((sum, item) => sum + item.count, 0);
+  const item = cell(row, total);
+  const nonzero = counts.filter((entry) => entry.count);
+  item.dataset.csv = total + (nonzero.length ? `（${nonzero.map((entry) => `${entry.label} ${entry.count}`).join("、")}）` : "");
+  if (nonzero.length) {
+    const details = document.createElement("div"); details.className = "stat-details";
+    for (const entry of nonzero) {
+      const badge = document.createElement("span"); badge.className = `child-badge ${entry.type}`;
+      badge.textContent = `${entry.label} ${entry.count}`; details.append(badge);
+    }
+    item.append(details);
+  }
+}
+// 各活動 fee: the amount on top, feeText's "（…未計入）" note below on grey; the CSV keeps the whole text.
+function amountCell(row, value) {
+  const text = typeof value === "string" ? value : feeText(value);
+  const split = text.indexOf("（");
+  const item = cell(row, split < 0 ? text : text.slice(0, split));
+  item.dataset.csv = text;
+  if (split >= 0) {
+    const note = document.createElement("div"); note.className = "stat-details amount-note";
+    note.textContent = text.slice(split); item.append(note);
+  }
 }
 
 function taipeiInput(value) {
@@ -509,7 +540,7 @@ async function saveReference(event, kind) {
 
 async function loadRegistrations() {
   const result = await api("list_registrations", { page, search, ...(district && { district_id: Number(district) }),
-    ...(childOnly && { children_only: true }), ...(["preschool", "elementary"].includes(childOnly) && { child_type: childOnly }) });
+    ...(identityFilter === "all_children" ? { children_only: true } : identityFilter ? { meal_identity: identityFilter } : {}) });
   count = result.count ?? 0;
   document.querySelector("#registration-count").textContent = `共 ${count} 筆`;
   document.querySelector("#page-number").textContent = `第 ${page + 1} 頁`;
@@ -523,7 +554,7 @@ async function loadRegistrations() {
     const row = document.createElement("tr");
     cell(row, registration.serial_no);
     const nameCell = cell(row, registration.full_name);
-    appendChildBadge(nameCell, registration.child_type);
+    appendIdentityBadge(nameCell, registration);
     cell(row, districtNames.get(registration.district_id));
     statusCell(row, "record", registration.record_status);
     statusCell(row, "import", registration.import_status);
@@ -603,8 +634,12 @@ async function showStatistics() {
     const students = Meals.hasStudentPrice(activity)
       ? attendees.filter((registration) => registration.meal_identity === "student").length : "—";
     const row = document.createElement("tr");
-    for (const value of [activity.title, attending, students, childrenSummary(attendees), notAttending, unanswered, feeText(fee),
-      cost === null ? "—" : `NT$${cost}`, cost === null ? "—" : feeText(subsidy)]) cell(row, value);
+    for (const value of [activity.title, attending, students]) cell(row, value);
+    childrenCell(row, attendees);
+    for (const value of [notAttending, unanswered]) cell(row, value);
+    amountCell(row, fee);
+    cell(row, cost === null ? "—" : `NT$${cost}`);
+    amountCell(row, cost === null ? "—" : subsidy);
     rows.append(row);
   }
   const noIdentity = registrations.filter((registration) => identityText(registration, activities) === "未回覆").length;
@@ -632,11 +667,13 @@ async function showStatistics() {
     districtTotal.people.push(...people);
     districtTotal.attendances.push(...attendances);
     const row = document.createElement("tr");
-    for (const value of [district.name, people.length, childrenSummary(people), amountText(feeOf(attendances))]) cell(row, value);
+    cell(row, district.name); cell(row, people.length); childrenCell(row, people); cell(row, amountText(feeOf(attendances)));
     districtRows.append(row);
     districtCards.push(districtActivityCard(district, people, activities));
   }
-  totalRow(districtRows, [districtTotal.people.length, childrenSummary(districtTotal.people), amountText(feeOf(districtTotal.attendances))]);
+  const districtSum = document.createElement("tr"); districtSum.className = "total";
+  cell(districtSum, "合計"); cell(districtSum, districtTotal.people.length); childrenCell(districtSum, districtTotal.people);
+  cell(districtSum, amountText(feeOf(districtTotal.attendances))); districtRows.append(districtSum);
   document.querySelector("#district-activity-cards").replaceChildren(...districtCards);
   showHostingStatistics(registrations);
 }
@@ -730,7 +767,7 @@ function saveCsv(rows, filename) {
 
 function appendStatisticsTable(rows, title, table, note = "") {
   rows.push([title]);
-  for (const row of table.rows) rows.push([...row.cells].map((item) => item.textContent));
+  for (const row of table.rows) rows.push([...row.cells].map((item) => item.dataset.csv ?? item.textContent));
   if (note) rows.push([note]);
   rows.push([]);
 }
@@ -788,7 +825,7 @@ async function downloadCsv() {
 
 // A new registration answers every activity. An edit only has to keep existing answers:
 // an activity the person never answered stays 未回覆 until they choose (requireAll = false).
-function renderChoiceFields(container, choices = new Map(), requireAll = true, identity = null) {
+function renderChoiceFields(container, choices = new Map(), requireAll = true) {
   container.replaceChildren();
   for (const activity of currentActivities()) {
     const item = document.createElement("div");
@@ -816,14 +853,14 @@ function renderChoiceFields(container, choices = new Map(), requireAll = true, i
     }
     container.append(item);
   }
-  Meals.render(container, currentActivities(), identity);
+  Meals.render(container, currentActivities());
 }
 
 // 兒童 (same rules as the public form): the surveys are not asked, since both are stored as 否, and the
 // parent's name is required at the bottom. editable is false while a record is only being viewed.
 function syncChildFields(form, editable = true) {
-  const child = Boolean(form.elements.child_type.value);
-  form.querySelector(".preschool-hint").hidden = form.elements.child_type.value !== "preschool";
+  const child = Boolean(Meals.childType(form.elements.meal_identity.value));
+  form.querySelector(".preschool-hint").hidden = form.elements.meal_identity.value !== "preschool";
   form.querySelector(".child-hint").hidden = !(child && editable);
   form.querySelector(".parent-name").hidden = !child;
   form.elements.parent_name.disabled = !child || !editable;
@@ -833,7 +870,7 @@ function syncChildFields(form, editable = true) {
 }
 // The parent's name to send: trimmed for a child, nothing otherwise; throws when a child has none.
 function parentNameFrom(form) {
-  if (!form.elements.child_type.value) return null;
+  if (!Meals.childType(form.elements.meal_identity.value)) return null;
   const name = form.elements.parent_name.value.trim();
   if (!name) throw new Error("請填寫家長姓名");
   return name;
@@ -841,7 +878,7 @@ function parentNameFrom(form) {
 
 // Staff follow the same audience and identity rules as the public form.
 const checkedStatus = (selector) => document.querySelector(`${selector} [name="hosting_status"]:checked`)?.value ?? null;
-const childTypeOf = (selector) => document.querySelector(selector).elements.child_type.value;
+const childTypeOf = (selector) => Meals.childType(document.querySelector(selector).elements.meal_identity.value);
 function syncNewMeals() {
   const childType = childTypeOf("#new-registration-form");
   Meals.sync(document.querySelector("#new-registration-choices"), currentActivities(), {
@@ -868,8 +905,10 @@ function renderNewRegistrationForm() {
   filter.replaceChildren(new Option("全部區", ""));
   for (const item of reference.districts) filter.add(new Option(item.name, item.id));
   filter.value = filtered;
+  Meals.renderIdentityFilter(document.querySelector("#search-form").elements.identity_filter, reference.used_identity_codes ?? []);
   const form = document.querySelector("#new-registration-form");
   const entered = new FormData(form);
+  Meals.renderIdentity(form.elements.meal_identity);
   const districts = form.elements.district_id;
   districts.replaceChildren(new Option("請選擇", ""));
   for (const district of reference.districts) {
@@ -877,7 +916,7 @@ function renderNewRegistrationForm() {
   }
   districts.value = entered.get("district_id") ?? "";
   const choices = new Map(choicesFromForm(form).map((item) => [item.activity_id, item.attending]));
-  renderChoiceFields(document.querySelector("#new-registration-choices"), choices, true, Meals.readIdentity(form));
+  renderChoiceFields(document.querySelector("#new-registration-choices"), choices, true);
   const hosting = document.querySelector("#new-registration-hosting");
   // Required only while the public survey is open, matching the public form.
   Hosting.render(hosting, Hosting.read(hosting), Boolean(reference.settings.is_hosting_open));
@@ -901,10 +940,10 @@ function openRegistration(registration, editing = false) {
   const detail = document.querySelector("#registration-detail");
   detail.hidden = false;
   document.querySelector("#detail-title").textContent = `登記 #${registration.serial_no}｜${registration.full_name}`;
-  appendChildBadge(document.querySelector("#detail-title"), registration.child_type);
+  appendIdentityBadge(document.querySelector("#detail-title"), registration);
   const form = document.querySelector("#edit-registration-form");
   form.elements.full_name.value = registration.full_name;
-  form.elements.child_type.value = registration.child_type ?? "";
+  Meals.renderIdentity(form.elements.meal_identity, registration.meal_identity ?? "general");
   form.elements.parent_name.value = registration.parent_name ?? "";
   const districts = form.elements.district_id;
   districts.replaceChildren();
@@ -916,7 +955,7 @@ function openRegistration(registration, editing = false) {
     districts.append(option);
   }
   const choices = new Map(registration.registration_choices.map((choice) => [choice.activity_id, choice.attending]));
-  renderChoiceFields(document.querySelector("#detail-choices"), choices, false, registration.meal_identity ?? null);
+  renderChoiceFields(document.querySelector("#detail-choices"), choices, false);
   document.querySelector("#import-form").elements.status.value = registration.import_status;
   // Only active rows can be edited; a historical cancelled row can still be voided.
   const isActive = registration.record_status === "active";
@@ -934,9 +973,6 @@ function openRegistration(registration, editing = false) {
   syncChildFields(form, editingRegistration);
   // Rendered after the loop above, which disables every button in view mode.
   showParentChildren(registration);
-  // In view mode sync() does not run, so show the stored identity whenever the choices need one.
-  const identity = document.querySelector("#detail-choices .meal-identity");
-  if (identity) identity.hidden = !Meals.needsIdentity(currentActivities(), registration.registration_choices);
   syncDetailMeals();
   const voidForm = document.querySelector("#void-form");
   voidForm.reset();
@@ -972,7 +1008,7 @@ async function openChildRegistration(serial) {
   if (!await showRegistrations(0, String(serial), "", "")) return;
   searchForm.elements.search.value = String(serial);
   searchForm.elements.district_id.value = "";
-  searchForm.elements.children_only.value = "";
+  searchForm.elements.identity_filter.value = "";
   updateClearSearch();
   const child = visibleRegistrations.find((item) => item.serial_no === serial);
   if (child) openRegistration(child);
@@ -1399,15 +1435,15 @@ document.querySelector("#close-staff-editor").addEventListener("click", () => {
 });
 
 // A failed load keeps the previous page and conditions, so the controls match the rows on screen.
-async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district, nextChildOnly = childOnly) {
-  const previous = [page, search, district, childOnly];
-  [page, search, district, childOnly] = [nextPage, nextSearch, nextDistrict, nextChildOnly];
+async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district, nextIdentityFilter = identityFilter) {
+  const previous = [page, search, district, identityFilter];
+  [page, search, district, identityFilter] = [nextPage, nextSearch, nextDistrict, nextIdentityFilter];
   try {
     await loadRegistrations();
     return true;
   } catch (error) {
     // A 401 has already logged out and cleared the conditions; restoring them would hand them to the next login.
-    if (session) [page, search, district, childOnly] = previous;
+    if (session) [page, search, district, identityFilter] = previous;
     showMessage(error.message, true);
     return false;
   } finally {
@@ -1417,24 +1453,24 @@ async function showRegistrations(nextPage, nextSearch = search, nextDistrict = d
 const searchForm = document.querySelector("#search-form");
 // Enabled while either the typed or the applied conditions are set, so a filter typed away but still on the list can be cleared.
 function updateClearSearch() {
-  document.querySelector("#clear-search").disabled = !search && !district && !childOnly
+  document.querySelector("#clear-search").disabled = !search && !district && !identityFilter
     && !searchForm.elements.search.value.trim() && !searchForm.elements.district_id.value
-    && !searchForm.elements.children_only.value;
+    && !searchForm.elements.identity_filter.value;
 }
 searchForm.addEventListener("input", updateClearSearch);
 searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
   showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value,
-    searchForm.elements.children_only.value);
+    searchForm.elements.identity_filter.value);
 });
 document.querySelector("#clear-search").addEventListener("click", async () => {
   const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value,
-    searchForm.elements.children_only.value];
+    searchForm.elements.identity_filter.value];
   searchForm.reset();
   // A failed load keeps the conditions from before the click, in the fields as well as on the list.
   if (!await showRegistrations(0, "", "", "") && session) {
     [searchForm.elements.search.value, searchForm.elements.district_id.value,
-      searchForm.elements.children_only.value] = entered;
+      searchForm.elements.identity_filter.value] = entered;
     updateClearSearch();
   }
 });
@@ -1461,8 +1497,8 @@ document.querySelector("#edit-registration-form").addEventListener("submit", asy
       district_id: Number(data.get("district_id")), choices,
       hosting: child ? null : Hosting.read(document.querySelector("#detail-hosting")),
       pickup: child ? null : Pickup.read(document.querySelector("#detail-pickup")),
-      meal_identity: Meals.readIdentity(document.querySelector("#detail-choices")),
-      is_child: child, child_type: form.elements.child_type.value, parent_name: parentName ?? undefined,
+      meal_identity: Meals.readIdentity(form),
+      is_child: child, child_type: Meals.childType(form.elements.meal_identity.value), parent_name: parentName ?? undefined,
     });
     await refreshRegistration();
     // Back in view mode the save button is hidden; focus the way back into editing.
@@ -1506,8 +1542,8 @@ document.querySelector("#new-registration-form").addEventListener("submit", asyn
       choices: choicesFromForm(form),
       hosting: child ? null : Hosting.read(document.querySelector("#new-registration-hosting")),
       pickup: child ? null : Pickup.read(document.querySelector("#new-registration-pickup")),
-      meal_identity: Meals.readIdentity(document.querySelector("#new-registration-choices")),
-      is_child: child, child_type: form.elements.child_type.value, parent_name: parentName ?? undefined,
+      meal_identity: Meals.readIdentity(form),
+      is_child: child, child_type: Meals.childType(form.elements.meal_identity.value), parent_name: parentName ?? undefined,
     });
     newRegistrationRequestId = crypto.randomUUID();
     const notice = document.querySelector("#new-registration-code");

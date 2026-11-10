@@ -32,11 +32,11 @@ test("the price text leaves out identities nobody can pick and names 一般 only
   assert.equal(Meals.priceText({ fee_amount: null, activity_identity_prices: [] }), "");
 });
 
-test("a stored identity counts only while a published meal is attended", () => {
+test("the identity counts toward fees only while a published meal is attended", () => {
   const attending = [{ activity_id: 1, attending: true }];
-  assert.equal(Meals.identityFor([{ id: 1, category: "meal" }], attending, "volunteer"), "volunteer");
-  assert.equal(Meals.identityFor([{ id: 1, category: "meeting" }], attending, "volunteer"), null);
-  assert.equal(Meals.identityFor([{ id: 1, category: "meal", is_published: false }], attending, "volunteer"), null);
+  assert.equal(Meals.needsIdentity([{ id: 1, category: "meal" }], attending), true);
+  assert.equal(Meals.needsIdentity([{ id: 1, category: "meeting" }], attending), false);
+  assert.equal(Meals.needsIdentity([{ id: 1, category: "meal", is_published: false }], attending), false);
 });
 
 test("unset fees are left out of totals but counted, and zero remains free", () => {

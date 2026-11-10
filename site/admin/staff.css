@@ -36,11 +36,9 @@ textarea { width: 100%; min-height: 6rem; padding: .65rem .75rem; border: 1px so
 .staff-form legend { margin-bottom: .25rem; font-weight: 600; }
 .inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; max-width: 40rem; }
 .inline-form > button { margin-top: 0; }
-#search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) auto auto auto; max-width: 56rem; }
+#search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) minmax(0, 13rem) auto auto; max-width: 56rem; }
 /* A select renders a little shorter than an input; filling the row keeps both labels and boxes level. */
 #search-form label { align-self: stretch; grid-template-rows: auto 1fr; }
-/* 兒童 sits level with the boxes, like the checkbox right of 區 on the registration forms. */
-#search-form label.check { display: flex; align-self: end; }
 .staff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .staff-actions button { margin-top: 0; }
 .pager { justify-content: center; }
@@ -69,11 +67,7 @@ main.wide .registration-form { max-width: none; }
 .staff-choice > label:nth-of-type(1) { grid-area: 1 / 2; }
 .staff-choice > label:nth-of-type(2) { grid-area: 1 / 3; }
 .staff-choice > :not(strong, label) { grid-column: 1 / -1; margin: 0; font-size: .85rem; }
-.staff-choice label, .activity-panel .meal-identity label { display: inline-flex; align-items: center; gap: .4rem; margin: 0; }
-.activity-panel .meal-identity { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 1.25rem;
-  padding: .45rem 0; }
-.activity-panel .meal-identity .activity-options { grid-area: 1 / 2; gap: 0 1.25rem; }
-.activity-panel .meal-identity .hint { grid-column: 1 / -1; margin: 0; font-size: .85rem; }
+.staff-choice label { display: inline-flex; align-items: center; gap: .4rem; margin: 0; }
 
 /* min-height keeps the form from jumping up when 修改登記資料 hides during an edit. */
 .detail-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem;
@@ -123,8 +117,12 @@ main.wide .compact-form { max-width: none; }
 .stat-cards .table-scroll { margin: 0; }
 /* A narrow card fits its three or four columns: tighter cells, and headers and names may wrap. */
 .stat-cards :is(th, td) { padding-inline: .4rem; white-space: normal; }
+/* The four summary cards: two a row on wide screens, one on phones; their short cells stay on one line. */
+.summary-stat-cards { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
+.summary-stat-cards :is(th, td) { white-space: nowrap; }
 /* 各區各活動: three cards a row on wide screens, so 全會所 and four districts read as 3 + 2; phones keep one a row. */
 @media (min-width: 56rem) {
+  .summary-stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   #district-activity-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 tr.total td { border-top: 2px solid #c9d4ce; background: #f6f9f7; font-weight: 700; }
@@ -214,12 +212,13 @@ tr.dragging .drag-handle { cursor: grabbing; }
   #admin-activities.reordering :is(th, td):nth-child(5) { display: none; }
 }
 
-/* The identity options line up with the 參加／不參加 columns; more identities wrap to the next row. */
 .activity-panel .staff-choice { grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem; }
-.activity-panel .meal-identity { grid-template-columns: minmax(0, 1fr) 12.25rem; }
-.activity-panel .meal-identity .activity-options { display: grid; grid-template-columns: 5.5rem 5.5rem; }
-.activity-panel .meal-identity label[hidden] { display: none; }
 
 .child-badge { display: inline-block; margin-left: .5em; padding: .15em .5em; border-radius: .4em; font-size: .85em; color: #253348; }
 .child-badge.preschool { background: #fce4ec; }
 .child-badge.elementary { background: #e1effe; }
+.child-badge.student { background: #eee5fa; }
+/* Statistics: child-type counts and fees' left-out notes sit under the number. */
+.stat-details { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; font-size: .85em; }
+.stat-details .child-badge { margin-left: 0; }
+.amount-note { background: #f0f1f2; border-radius: .35rem; padding: .2rem .4rem; white-space: normal; max-width: 22rem; margin-left: auto; }

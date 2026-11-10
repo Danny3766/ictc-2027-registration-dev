@@ -8,6 +8,7 @@ test("建立、以姓名與區查詢並儲存登記", async ({ page }) => {
   await expect(page.getByRole("button", { name: "送出登記" })).toBeEnabled();
   await page.locator('#registration-form input[name="full_name"]').fill(name);
   await page.locator('#registration-form select[name="district_id"]').selectOption("1");
+  await page.locator('#registration-form select[name="meal_identity"]').selectOption("general");
   for (const activity of await page.locator("#registration-form .activity").all()) {
     await activity.locator('input[value="false"]').check();
   }
@@ -32,6 +33,7 @@ test("建立、以姓名與區查詢並儲存登記", async ({ page }) => {
   await page.getByRole("tab", { name: "登記參加" }).click();
   await page.locator('#registration-form input[name="full_name"]').fill(name);
   await page.locator('#registration-form select[name="district_id"]').selectOption("1");
+  await page.locator('#registration-form select[name="meal_identity"]').selectOption("general");
   for (const activity of await page.locator("#registration-form .activity").all()) {
     await activity.locator('input[value="false"]').check();
   }
