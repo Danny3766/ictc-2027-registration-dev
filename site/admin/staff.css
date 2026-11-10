@@ -215,9 +215,6 @@ tr.dragging .drag-handle { cursor: grabbing; }
 .activity-panel .staff-choice { grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem; }
 
 .child-badge { display: inline-block; margin-left: .5em; padding: .15em .5em; border-radius: .4em; font-size: .85em; color: #253348; }
-.child-badge.preschool { background: #fce4ec; }
-.child-badge.elementary { background: #e1effe; }
-.child-badge.student { background: #eee5fa; }
 /* Statistics: child-type counts and fees' left-out notes sit under the number. */
 .stat-details { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; font-size: .85em; }
 .stat-details .child-badge { margin-left: 0; }

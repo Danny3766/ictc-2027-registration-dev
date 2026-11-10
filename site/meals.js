@@ -22,9 +22,9 @@ const Meals = (() => {
   const eligible = (activity, context = {}) => {
     const audience = activity.audience ?? "all";
     if (audience === "all") return true;
-    // 兒童 answer neither survey and are outside both audiences (decided 2026-11-09).
-    if (audience === "hosting") return Boolean(context.isChild) || hostingStatuses.includes(context.hostingStatus);
-    if (audience === "pickup") return Boolean(context.isChild) || context.pickupStatus === "yes";
+    // Whoever answers neither survey is outside both audiences (兒童 2026-11-09, any non-一般 2026-11-10).
+    if (audience === "hosting") return Boolean(context.skipsHosting) || hostingStatuses.includes(context.hostingStatus);
+    if (audience === "pickup") return Boolean(context.skipsHosting) || context.pickupStatus === "yes";
     if (!audience.startsWith("activity:")) return false;
     const requiredId = Number(audience.slice(9));
     const prerequisite = context.activities?.find((item) => item.id === requiredId);
@@ -144,6 +144,8 @@ const Meals = (() => {
   // The form's 身分別; null while 請選擇.
   const readIdentity = (form) => form.elements.meal_identity.value || null;
   const childType = (identity) => identity === "preschool" ? "preschool" : identity === "child" ? "elementary" : "";
+  // Only 一般 answers 開家接待 and 接機接待; the server stores 否 for anyone else (decided 2026-11-10).
+  const answersHosting = (identity) => identity === "general";
   // 身分別 options: new picks follow selectable(); the stored identity stays even when stopped or staff-only.
   function renderIdentity(select, stored = null) {
     const current = stored ?? select.value;
@@ -204,7 +206,7 @@ const Meals = (() => {
   const revertedCount = (container) => container.querySelectorAll("input[data-reverted]").length;
 
   return {
-    configure, identityLabels, childType, renderIdentity, renderIdentityFilter, hasStudentPrice, eligible, fee, addFees, needsIdentity, priceText, feeText, mapUrl, activityTime,
+    configure, identityLabels, childType, answersHosting, renderIdentity, renderIdentityFilter, hasStudentPrice, eligible, fee, addFees, needsIdentity, priceText, feeText, mapUrl, activityTime,
     render, sync, choices, readIdentity, revertedCount,
   };
 })();

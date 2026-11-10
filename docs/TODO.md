@@ -1,5 +1,21 @@
 ﻿# ICTC 2027 登記系統 TODO
 
+## 本次新增必要範圍：接待題限一般身分、提醒區塊與查詢結果版面
+
+2026-11-10 Q1～Q13 已確認，本機實作與驗證已完成，尚未部署。規格見 [需求討論與決策紀錄](需求討論與決策紀錄.md) 同名最新章節。
+
+- [x] 資料庫：非一般身分（學生、兒童、自訂）不回答開家／接機並存「否」，公開與後台共用；身分空值不套用。報名對象「開家接待者」「接機者」對非一般身分不設限。新增 `202611100004_hosting_general_only.sql`，含既有學生與自訂身分答案回填為「否」及每筆審計紀錄。
+- [x] 新增部署前查詢 `supabase/testing/preview-hosting-general-only.sql`（只讀，列出受影響筆數與名單）及驗證 `supabase/testing/verify-hosting-general-only.sql`（測試資料回滾）。
+- [x] 公開登記：身分別選「一般」才顯示接待區塊，「請選擇」與其他身分隱藏；修改時改身分比照兒童，不另外確認。
+- [x] 後台協助登記與修改登記：非一般身分隱藏接待區塊；報名對象判斷同步。
+- [x] 提醒區塊：兒童提醒與活動選擇說明改藍色資訊區塊（公開頁）；後台兒童提醒同步改藍色。
+- [x] 查詢或修改登記：兒童提醒藍色；活動選擇說明藍色且只在修改時顯示；兩行說明改灰色區塊；查詢結果包進「登記內容」外框。
+- [x] 補 Playwright（桌機、手機）：身分切換顯示接待、報名對象、提醒區塊樣式、查詢結果外框；後台截圖確認國小標籤與藍色提醒不混淆。
+- [ ] 測試站：先執行 `preview-hosting-general-only.sql` 並請專案負責人確認受影響名單（結果含個資，不貼到 repo、PR 或對話），關閉登記後套用 `202611100004_hosting_general_only.sql`，執行 `verify-hosting-general-only.sql`，再部署前端（Edge Function 本次無變更）；正式站依正式環境 9-3 關閉登記後同樣先查名單再更新。
+- [ ] 更新過時的資料庫驗證 SQL：`verify-activity-audiences`、`verify-all-no-and-rate-limit`、`verify-child-registration`、`verify-child-type`、`verify-independent-pickup`、`verify-meal-pricing-and-audience`、`verify-registration-identities` 未帶身分別或沿用舊規則，在統一身分別之後即失敗（未套用本次 migration 也失敗）。改為帶入身分，或標示為歷史腳本不再執行。
+
+本機驗證：隔離 PostgreSQL 套用全部 migration，`verify-hosting-general-only.sql`、`verify-unified-identity.sql`、`verify-identity-badges.sql`、`verify-independent-identity-prices.sql` 通過；回填只改既有學生與自訂身分、一般與身分空值不變並寫審計紀錄，部署前查詢在套用後為 0 筆。24 項單元測試、四種瀏覽器 Playwright 482 項通過；4 項在並行負載下偶發失敗，重跑 32 次通過；`rls.spec` 因公司網路連不到 Supabase 未驗證。測試站與正式站尚未部署。
+
 ## 本次新增必要範圍：統一身分別與統計排版
 
 2026-11-10 Q1～Q10 已確認，本機實作與驗證已完成，尚未部署。規格見 [需求討論與決策紀錄](需求討論與決策紀錄.md) 同名最新章節及 [用餐身分管理](用餐身分管理.md)。原兒童下拉、名單篩選及統計呈現由本輪規格取代，既有兒童類型資料與家長規則繼續沿用。
@@ -10,7 +26,7 @@
 - [x] 名單姓名旁與詳情標題加學生淡紫標籤，一般不加標籤，兒童沿用粉紅／粉藍底。
 - [x] 各活動與各區的兒童總數在上，非零類型標籤在下；費用與補貼金額在上，未計入說明在下並加淺灰底。統計 CSV 保留文字分隔，個人明細兒童類型／家長姓名欄保留。
 - [x] 補資料庫／Edge Function 必要驗證及桌機、手機 Playwright，涵蓋既有身分保留、無用餐仍必填、兒童切換、身分篩選、標籤、零人類型隱藏及 CSV。
-- [ ] 測試站：確認已套用 `202611100001_child_type.sql`，再套用 `202611100002_unified_identity.sql`，執行 `supabase/testing/verify-unified-identity.sql`，部署 `registration`、`staff` Edge Function 及前端，驗收後再依正式環境 9-3 關閉登記並更新正式站。
+- [ ] 測試站：確認已套用 `202611100001_child_type.sql`，再套用 `202611100002_unified_identity.sql`、`202611100003_identity_badges.sql`，執行 `supabase/testing/verify-unified-identity.sql`、`supabase/testing/verify-identity-badges.sql`，部署 `registration`、`staff` Edge Function 及前端，驗收後再依正式環境 9-3 關閉登記並更新正式站。
 
 本機驗證：18 項單元測試、118 項桌機 Chromium Playwright，以及桌機 WebKit／手機 Chrome／手機 Safari 共 18 項針對性 Playwright 通過。隔離 PostgreSQL 套用新 migration，統一身分別 SQL 驗證通過並回滾測試資料。測試站與正式站尚未部署。
 

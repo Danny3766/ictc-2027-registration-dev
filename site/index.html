@@ -62,8 +62,10 @@
             >
             <label class="identity-select">身分別<select name="meal_identity" required><option value="">請選擇</option></select></label>
           </div>
-          <p class="hint preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
-          <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
+          <div class="reminder">
+            <p class="preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
+            <p class="child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
+          </div>
           <fieldset id="hosting-section" class="hosting-section" hidden>
             <legend>開家接待</legend>
             <div class="hosting-survey">
@@ -79,7 +81,7 @@
           </fieldset>
           <fieldset>
             <legend>活動選擇</legend>
-            <p class="hint">請為每項活動選擇參加或不參加，報名截止前都可以修改登記</p>
+            <p class="reminder">請為每項活動選擇參加或不參加，報名截止前都可以修改登記</p>
             <div id="activities"></div>
           </fieldset>
           <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required disabled /></label>
@@ -100,16 +102,21 @@
           </div>
           <button type="submit">查詢</button>
         </form>
-        <form id="edit-form" hidden>
+        <form id="edit-form" class="result-frame" hidden>
+          <h2 class="result-title">登記內容</h2>
           <div class="identity-fields with-child">
             <label>姓名<input id="edit-full-name" readonly /></label>
             <label>區<input id="edit-district" readonly /></label>
             <label class="identity-select">身分別<select name="meal_identity" required disabled><option value="">請選擇</option></select></label>
           </div>
-          <p class="hint preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
-          <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
-          <p class="hint">姓名或區需要更正時，請聯絡服事者。</p>
-          <p id="edit-mode-hint" class="hint" hidden>正在修改登記內容。</p>
+          <div class="reminder">
+            <p class="preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
+            <p class="child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
+          </div>
+          <div class="note">
+            <p>姓名或區需要更正時，請聯絡服事者。</p>
+            <p class="edit-only" hidden>正在修改登記內容。</p>
+          </div>
           <fieldset id="edit-hosting-section" class="hosting-section" hidden>
             <legend>開家接待與接機接待</legend>
             <p class="hint hosting-description" hidden></p>
@@ -122,6 +129,7 @@
           </fieldset>
           <fieldset>
             <legend>活動選擇</legend>
+            <p class="reminder edit-only" hidden>請為每項活動選擇參加或不參加，報名截止前都可以修改登記</p>
             <div id="edit-activities"></div>
           </fieldset>
           <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required readonly /></label>

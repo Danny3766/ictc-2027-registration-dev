@@ -276,7 +276,7 @@ export async function handler(request) {
       database.from("districts").select("id,name,sort_order").order("sort_order"),
       database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),cost_amount,audience,audience_note,is_published,sort_order").order("sort_order"),
       database.from("program_items").select("id,event_date,start_time,end_time,title,note,sort_order,is_visible").order("sort_order"),
-      database.from("registration_identities").select("code,name,is_active,public_selectable").order("sort_order"),
+      database.from("registration_identities").select("code,name,is_active,public_selectable,show_badge,badge_color").order("sort_order"),
       database.rpc("registration_used_identity_codes"),
     ]);
     if ([settings, districts, activities, program, identities, usedIdentities].some((item) => item.error)) {

@@ -82,8 +82,10 @@
                   <label class="identity-select">身分別<select name="meal_identity" required><option value="">請選擇</option></select></label>
                 </div>
                 <div id="detail-children" class="detail-children" hidden><strong>這位家長的兒童</strong><ul></ul></div>
-                <p class="hint preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
-                <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
+                <div class="reminder">
+                  <p class="preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
+                  <p class="child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
+                </div>
                 <fieldset class="hosting-panel"><legend>開家接待與接機接待</legend><div id="detail-hosting"></div><div id="detail-pickup"></div></fieldset>
               </div>
               <fieldset class="activity-panel"><legend>公開活動選擇</legend><div id="detail-choices"></div></fieldset>
@@ -123,8 +125,10 @@
                   <label>區<select name="district_id" required></select></label>
                   <label class="identity-select">身分別<select name="meal_identity" required><option value="">請選擇</option></select></label>
                 </div>
-                <p class="hint preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
-                <p class="hint child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
+                <div class="reminder">
+                  <p class="preschool-hint" hidden>6 歲（含）以內且身高 115 公分以下，年齡以特會當天為準</p>
+                  <p class="child-hint" hidden>兒童報名請在表單最下方填寫家長姓名。</p>
+                </div>
                 <fieldset class="hosting-panel"><legend>開家接待與接機接待</legend><div id="new-registration-hosting"></div><div id="new-registration-pickup"></div></fieldset>
               </div>
               <fieldset class="activity-panel"><legend>公開活動選擇</legend><div id="new-registration-choices"></div></fieldset>
@@ -249,11 +253,14 @@
               <label>身分名稱<input name="name" maxlength="30" required /></label>
               <label class="check"><input name="is_active" type="checkbox" checked />啟用</label>
               <label class="check"><input name="public_selectable" type="checkbox" checked />開放報名者選擇</label>
+              <label class="check"><input name="show_badge" type="checkbox" />顯示標籤</label>
+              <label>標籤底色<input name="badge_color" type="color" value="#e1effe" /></label>
+              <label>底色色碼<input name="badge_color_hex" value="#e1effe" pattern="#[0-9a-fA-F]{6}" maxlength="7" required title="六位 HEX 色碼，例如 #e1effe" /></label>
               <button type="submit">儲存身分</button><button type="reset" class="secondary">取消／新增</button>
             </div>
           </form>
           <p class="hint">已使用的身分只能停用；一般與兩種兒童身分保留。兒童身分依兒童類型自動帶入。</p>
-          <div class="table-scroll"><table><thead><tr><th>身分</th><th>狀態</th><th>開放選擇</th><th>操作</th></tr></thead><tbody id="identity-rows"></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>身分</th><th>狀態</th><th>開放選擇</th><th>標籤</th><th>操作</th></tr></thead><tbody id="identity-rows"></tbody></table></div>
         </section>
 
         <section id="admin-activities" class="card" data-view="admin-activities" hidden>
