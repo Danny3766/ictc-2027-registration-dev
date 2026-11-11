@@ -152,6 +152,7 @@ function clearSession() {
   document.querySelector("#new-registration-code").textContent = "";
   document.querySelector("#new-registration-code").hidden = true;
   setReordering(false);
+  setIdentityReordering(false);
   // The 協助登記 form keeps input across redraws, so a shared device must not hand it to the next login.
   document.querySelector("#new-registration-form").reset();
   // The list's conditions belong to this login too.
@@ -484,16 +485,18 @@ function syncSurveyIdentitySettings() {
   }
 }
 
-function renderSurveyIdentities() {
+// keepInput: a redraw for a renamed or reordered identity keeps unsaved ticks in the hosting form.
+function renderSurveyIdentities(keepInput = false) {
   for (const kind of ["hosting", "pickup"]) {
     const selected = reference.settings[`${kind}_identity_codes`] ?? ["general"];
     const container = document.querySelector(`#${kind}-identities .survey-identities`);
+    const checked = keepInput ? [...container.querySelectorAll("input:checked")].map((input) => input.value) : selected;
     container.replaceChildren();
     for (const identity of reference.identities ?? []) {
       if (!(identity.is_active && identity.public_selectable) && !selected.includes(identity.code)) continue;
       const option = document.createElement("label"); option.className = "check";
       const input = document.createElement("input"); input.type = "checkbox";
-      input.name = `${kind}_identity_codes`; input.value = identity.code; input.checked = selected.includes(identity.code);
+      input.name = `${kind}_identity_codes`; input.value = identity.code; input.checked = checked.includes(identity.code);
       option.append(input, identity.name + (!identity.is_active ? "（已停用）" : !identity.public_selectable ? "（僅後台可選）" : ""));
       container.append(option);
     }
@@ -1215,10 +1218,12 @@ const identityPricesFrom = (form) => [...form.querySelectorAll("[data-identity-p
 const reservedIdentity = (code) => ["general", "child", "preschool"].includes(code);
 
 function renderIdentities() {
+  if (document.querySelector("#admin-identities").classList.contains("reordering")) return;
   const rows = document.querySelector("#identity-rows");
   rows.replaceChildren();
   for (const identity of reference.identities ?? []) {
     const row = document.createElement("tr");
+    row.dataset.code = identity.code;
     cell(row, identity.name);
     cell(row, identity.is_active ? "啟用" : "停用");
     cell(row, identity.public_selectable ? "是" : "僅後台");
@@ -1243,20 +1248,35 @@ function renderIdentities() {
       });
       row.lastElementChild.append(remove);
     }
+    const handleCell = cell(row, "");
+    handleCell.className = "reorder-col";
+    const number = document.createElement("span");
+    number.className = "sort-number";
+    number.textContent = rows.children.length + 1;
+    const handle = document.createElement("button");
+    handle.type = "button";
+    handle.className = "drag-handle";
+    handle.textContent = "☰";
+    handle.setAttribute("aria-label", `拖曳排序：${identity.name}`);
+    handleCell.append(number, handle);
     rows.append(row);
   }
 }
 
 async function saveIdentity(kind, data) {
-  const activityForm = document.querySelector("#activity-form");
+  if (document.querySelector("#admin-identities").classList.contains("reordering")) return;
+  if (identitySaving) return;
+  identitySaving = true;
+  identityReorderButton.disabled = true;
+  try { await persistIdentity(kind, data); }
+  finally { identitySaving = false; identityReorderButton.disabled = false; }
+}
+
+async function persistIdentity(kind, data) {
   try {
     await api("save_reference", { kind, data });
     reference = await api("list_reference");
-    Meals.configure(reference.identities, true, reference.settings);
-    renderIdentities();
-    // Prices typed into an open activity form survive the redraw of its fields.
-    renderIdentityPrices({ activity_identity_prices: identityPricesFrom(activityForm) });
-    renderNewRegistrationForm();
+    redrawIdentities();
     document.querySelector("#identity-form").reset();
     showMessage("身分已更新。");
   } catch (error) { showMessage(error.message, true); return; }
@@ -1322,6 +1342,71 @@ let endDrag = null;
 
 const activityOrder = () => Array.from(activityRows.rows, (row) => Number(row.dataset.id));
 
+const identitySection = document.querySelector("#admin-identities");
+const identityRows = document.querySelector("#identity-rows");
+const identityReorderButton = document.querySelector("#reorder-identities");
+const identityCancelButton = document.querySelector("#cancel-identity-reorder");
+const identityOrder = () => Array.from(identityRows.rows, (row) => row.dataset.code);
+let identityOrderBefore = "";
+let identitySaving = false;
+
+function setIdentityReordering(on) {
+  endDrag?.();
+  identitySection.classList.toggle("reordering", on);
+  identityReorderButton.textContent = on ? "完成排序" : "調整排序";
+  identityReorderButton.classList.toggle("secondary", !on);
+  identityCancelButton.hidden = !on;
+  document.querySelector("#identity-reorder-hint").hidden = !on;
+  document.querySelector("#identity-form").inert = on;
+  for (const button of identityRows.querySelectorAll("button:not(.drag-handle)")) button.disabled = on;
+}
+
+function redrawIdentities() {
+  Meals.configure(reference.identities, true, reference.settings);
+  renderIdentities();
+  renderSurveyIdentities(true);
+  // Prices typed into an open activity form survive the redraw of its fields.
+  renderIdentityPrices({ activity_identity_prices: identityPricesFrom(document.querySelector("#activity-form")) });
+  renderNewRegistrationForm();
+}
+
+identityReorderButton.addEventListener("click", async () => {
+  if (identitySaving) return;
+  if (!identitySection.classList.contains("reordering")) {
+    identityOrderBefore = JSON.stringify(identityOrder());
+    setIdentityReordering(true);
+    return;
+  }
+  endDrag?.();
+  const order = identityOrder();
+  if (JSON.stringify(order) === identityOrderBefore) return setIdentityReordering(false);
+  identityReorderButton.disabled = identityCancelButton.disabled = true;
+  identityRows.inert = true;
+  try {
+    await api("reorder_identities", { identity_codes: order });
+    const byCode = new Map(reference.identities.map((item) => [item.code, item]));
+    reference.identities = order.map((code, index) => ({ ...byCode.get(code), sort_order: index + 1 }));
+  } catch (error) {
+    if (error.status !== 409) return showMessage(error.message, true);
+    try { reference.identities = (await api("list_reference")).identities; }
+    catch (reloadError) { return showMessage(`${error.message}（重新載入失敗：${reloadError.message}）`, true); }
+    setIdentityReordering(false);
+    redrawIdentities();
+    return showMessage("身分清單已有變動，已重新載入，請再調整一次排序。", true);
+  } finally {
+    identityReorderButton.disabled = identityCancelButton.disabled = false;
+    identityRows.inert = false;
+  }
+  setIdentityReordering(false);
+  redrawIdentities();
+  showMessage("身分排序已儲存。");
+});
+
+identityCancelButton.addEventListener("click", () => {
+  setIdentityReordering(false);
+  renderIdentities();
+});
+
 function setReordering(on) {
   // A drag still running would move a row that a redraw has already replaced.
   endDrag?.();
@@ -1382,76 +1467,84 @@ cancelReorderButton.addEventListener("click", () => {
   setReordering(false);
 });
 
-activityRows.addEventListener("pointerdown", (event) => {
-  const handle = event.target.closest(".drag-handle");
-  // Only the first finger or the main mouse button drags; a second finger or a right-click does not.
-  if (!handle || !activitySection.classList.contains("reordering") || !event.isPrimary || event.button !== 0) return;
-  event.preventDefault();
-  endDrag?.();
-  const row = handle.closest("tr");
-  row.classList.add("dragging");
-  let clientX;
-  let clientY;
-  // The sticky navigation bar covers the top of the page on desktop, so its bottom is the top edge.
-  const topEdge = () => Math.max(0, staffNav.getBoundingClientRect().bottom);
-  const place = () => {
-    const y = Math.max(clientY, topEdge() + 1);
-    const target = document.elementFromPoint(clientX, y)?.closest("#activity-rows tr");
-    if (!target || target === row) return;
-    const { top, height } = target.getBoundingClientRect();
-    activityRows.insertBefore(row, y < top + height / 2 ? target : target.nextElementSibling);
-  };
-  // touch-action: none stops the finger from scrolling, so scroll while the pointer rests near
-  // the top or bottom edge; otherwise a row could only reach positions already on screen.
-  let frame;
-  const autoScroll = () => {
-    const edge = 56;
-    const step = clientY === undefined ? 0 : clientY < topEdge() + edge ? -10 : clientY > window.innerHeight - edge ? 10 : 0;
-    if (step) {
-      window.scrollBy(0, step);
-      place();
-    }
+for (const [sortRows, sortSection] of [[activityRows, activitySection], [identityRows, identitySection]]) {
+  sortRows.addEventListener("pointerdown", (event) => {
+    const handle = event.target.closest(".drag-handle");
+    // Only the first finger or the main mouse button drags; a second finger or a right-click does not.
+    if (!handle || !sortSection.classList.contains("reordering") || sortRows.inert || !event.isPrimary || event.button !== 0) return;
+    event.preventDefault();
+    endDrag?.();
+    const row = handle.closest("tr");
+    row.classList.add("dragging");
+    let clientX;
+    let clientY;
+    // The sticky navigation bar covers the top of the page on desktop, so its bottom is the top edge.
+    const topEdge = () => Math.max(0, staffNav.getBoundingClientRect().bottom);
+    const place = () => {
+      const y = Math.max(clientY, topEdge() + 1);
+      const target = document.elementFromPoint(clientX, y)?.closest("tr");
+      if (target?.parentElement !== sortRows || target === row) return;
+      const { top, height } = target.getBoundingClientRect();
+      sortRows.insertBefore(row, y < top + height / 2 ? target : target.nextElementSibling);
+    };
+    // touch-action: none stops the finger from scrolling, so scroll while the pointer rests near
+    // the top or bottom edge; otherwise a row could only reach positions already on screen.
+    let frame;
+    const autoScroll = () => {
+      const edge = 56;
+      const step = clientY === undefined ? 0 : clientY < topEdge() + edge ? -10 : clientY > window.innerHeight - edge ? 10 : 0;
+      if (step) {
+        window.scrollBy(0, step);
+        place();
+      }
+      frame = requestAnimationFrame(autoScroll);
+    };
     frame = requestAnimationFrame(autoScroll);
-  };
-  frame = requestAnimationFrame(autoScroll);
-  // Listen on window: pointer capture is not reliable across browsers, and a missed capture would
-  // send moves to whatever element is under the pointer instead of this handle.
-  const finish = () => {
-    cancelAnimationFrame(frame);
-    row.classList.remove("dragging");
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", end);
-    window.removeEventListener("pointercancel", end);
-    window.removeEventListener("blur", finish);
-    endDrag = null;
-  };
-  const move = (moveEvent) => {
-    if (moveEvent.pointerId !== event.pointerId) return;
-    // A release outside the window may never send pointerup; no button held means the drag is over.
-    if (moveEvent.buttons === 0) return finish();
-    ({ clientX, clientY } = moveEvent);
-    place();
-  };
-  const end = (endEvent) => {
-    if (endEvent.pointerId === event.pointerId) finish();
-  };
-  endDrag = finish;
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end);
-  window.addEventListener("pointercancel", end);
-  window.addEventListener("blur", finish);
-});
+    // Listen on window: pointer capture is not reliable across browsers, and a missed capture would
+    // send moves to whatever element is under the pointer instead of this handle.
+    const finish = () => {
+      cancelAnimationFrame(frame);
+      row.classList.remove("dragging");
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("blur", finish);
+      endDrag = null;
+    };
+    const move = (moveEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      // A release outside the window may never send pointerup; no button held means the drag is over.
+      if (moveEvent.buttons === 0) return finish();
+      ({ clientX, clientY } = moveEvent);
+      place();
+    };
+    const end = (endEvent) => {
+      if (endEvent.pointerId === event.pointerId) finish();
+    };
+    endDrag = finish;
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    window.addEventListener("blur", finish);
+  });
 
-activityRows.addEventListener("keydown", (event) => {
-  const handle = event.target.closest(".drag-handle");
-  if (!handle || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
-  event.preventDefault();
-  const row = handle.closest("tr");
-  const sibling = event.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling;
-  if (!sibling) return;
-  sibling.insertAdjacentElement(event.key === "ArrowUp" ? "beforebegin" : "afterend", row);
-  handle.focus();
-});
+  sortRows.addEventListener("keydown", (event) => {
+    const handle = event.target.closest(".drag-handle");
+    if (!handle || sortRows.inert || !sortSection.classList.contains("reordering") || !["ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const row = handle.closest("tr");
+    const sibling = event.key === "ArrowUp" ? row.previousElementSibling : row.nextElementSibling;
+    if (!sibling) return;
+    const before = event.key === "ArrowUp" ? sibling : sibling.nextElementSibling;
+    if (sortRows.moveBefore) sortRows.moveBefore(row, before);
+    else sortRows.insertBefore(row, before);
+    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+    handle.focus({ preventScroll: true });
+    if (sortRows === identityRows) {
+      document.querySelector("#identity-reorder-status").textContent = `${row.cells[0].textContent}，第 ${[...sortRows.rows].indexOf(row) + 1} 位`;
+    }
+  });
+}
 
 document.querySelector("#login-form").addEventListener("submit", async (event) => {
   event.preventDefault();

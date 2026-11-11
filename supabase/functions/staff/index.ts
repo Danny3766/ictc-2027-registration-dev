@@ -381,6 +381,23 @@ export async function handler(request) {
 
   if (profile.role !== "admin") return response({ error: "沒有操作權限" }, 403);
 
+  if (body.action === "reorder_identities") {
+    const codes = body.identity_codes;
+    if (!Array.isArray(codes) || codes.length === 0 || codes.length > 500
+      || !codes.every((code) => typeof code === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(code))
+      || new Set(codes).size !== codes.length) return response({ error: "INVALID_REQUEST" }, 400);
+    const { error } = await database.rpc("staff_reorder_identities", {
+      p_actor: profile.auth_user_id, p_identity_codes: codes,
+    });
+    if (error) {
+      if (lostAccess(error)) return lostAccessResponse();
+      if (isInputError(error)) return response({ error: "身分清單已有變動，請重新整理後再排序" }, 409);
+      console.error("Failed to reorder identities", error);
+      return response({ error: "排序儲存失敗" }, 503);
+    }
+    return response({ success: true });
+  }
+
   if (body.action === "reorder_activities") {
     const ids = body.activity_ids;
     if (!Array.isArray(ids) || ids.length === 0 || ids.length > 500

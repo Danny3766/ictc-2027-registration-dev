@@ -164,7 +164,7 @@ table.numeric td:not(:first-child), table.numeric th:not(:first-child) { text-al
 /* Activity reorder: the last column's header holds 調整排序 (and 取消 beside it while reordering); its
    cells show each activity's order number, and the ☰ handles in their place only while reordering.
    touch-action keeps a finger drag from scrolling the page on phones. */
-#admin-activities { position: relative; }
+:is(#admin-activities, #admin-identities) { position: relative; }
 .reorder-col { width: 1%; text-align: right; }
 td.reorder-col { text-align: center; }
 .reordering .sort-number { display: none; }
@@ -174,7 +174,7 @@ th.reorder-col .visually-hidden { left: 0; }
 .reorder-buttons { display: flex; justify-content: flex-end; gap: .35rem; }
 th .reorder-buttons button { min-height: 2rem; margin: 0; padding: .25rem .8rem; font-size: .9rem; white-space: nowrap; }
 td .drag-handle { display: none; min-height: 2.5rem; min-width: 2.5rem; padding: 0; border: 0; background: transparent;
-  color: #59655f; font-size: 1.3rem; cursor: grab; touch-action: none; }
+  color: #59655f; font-size: 1.3rem; cursor: grab; touch-action: none; -webkit-user-select: none; user-select: none; }
 .reordering td .drag-handle { display: inline-block; }
 td .drag-handle:hover, td .drag-handle:focus-visible { background: #e8f1ec; }
 tr.dragging { background: #e8f1ec; box-shadow: 0 .25rem .75rem #173c2d26; }
@@ -207,12 +207,14 @@ tr.dragging .drag-handle { cursor: grabbing; }
   #registration-table th:nth-child(6), #registration-table td:nth-child(6) { display: none; }
   /* The header cell scrolls sideways with the table, so on phones the buttons sit beside the 活動 title
      (absolute to the section, which the table's scroll box does not clip). */
-  #admin-activities .reorder-buttons { position: absolute; top: 2.3rem; right: 1.25rem; }
+  :is(#admin-activities, #admin-identities) .reorder-buttons { position: absolute; top: 2.3rem; right: 1.25rem; }
   /* While reordering on a phone, keep only name, type and ☰ so the handle stays on screen
      (time, published and the disabled edit button are not needed to pick an order). */
   #admin-activities.reordering :is(th, td):nth-child(3),
   #admin-activities.reordering :is(th, td):nth-child(4),
   #admin-activities.reordering :is(th, td):nth-child(5) { display: none; }
+  /* Identities likewise keep only the name and ☰. */
+  #admin-identities.reordering :is(th, td):nth-child(n+2):nth-child(-n+5) { display: none; }
 }
 
 .activity-panel .staff-choice { grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem; }

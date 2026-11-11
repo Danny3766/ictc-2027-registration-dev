@@ -9,6 +9,17 @@ const identities = [
   { code: "retired", name: "舊身分", is_active: false, public_selectable: true },
 ];
 
+test("public identity dropdown follows saved order while filtering restricted choices", async ({ page }) => {
+  await page.goto("/");
+  await page.setContent('<select name="meal_identity"></select>');
+  await page.addScriptTag({ url: "/meals.js" });
+  await page.evaluate((items) => {
+    Meals.configure(items);
+    Meals.renderIdentity(document.querySelector("select"));
+  }, [identities[2], identities[3], identities[1], identities[4], identities[0]]);
+  await expect(page.locator("select option")).toHaveText(["請選擇", "兒童（學齡前）", "兒童", "一般"]);
+});
+
 test("identity dropdown preserves stored restricted identities and supports children without meals", async ({ page }) => {
   await page.goto("/");
   await page.setContent('<form><select name="meal_identity" required></select></form>');

@@ -762,6 +762,111 @@ const threeActivities = {
 };
 const activityTitles = (page) => page.locator("#activity-rows tr td:first-child summary").allTextContents();
 
+test("identity reorder moves reserved and inactive identities, cancels and persists", async ({ page }) => {
+  let saved;
+  const data = threeActivities.list_reference().json;
+  migrateReference(data);
+  data.identities.push({ code: "inactive", name: "停用身分", is_active: false, public_selectable: false });
+  await mockStaff(page, "admin", () => {}, "測試登記", {
+    list_reference: () => ({ json: data }),
+    reorder_identities: (payload) => {
+      saved = payload.identity_codes;
+      data.identities = saved.map((code) => data.identities.find((item) => item.code === code));
+      return { json: { success: true } };
+    },
+  });
+  await login(page, "身分別");
+  const handles = page.locator("#identity-rows .drag-handle");
+  const titleBox = await page.locator("#admin-identities h2").boundingBox();
+  const reorderBox = await page.locator("#reorder-identities").boundingBox();
+  const phone = await page.locator("#admin-identities .reorder-buttons").evaluate((element) => getComputedStyle(element).position === "absolute");
+  if (phone) expect(Math.abs(titleBox.y - reorderBox.y)).toBeLessThan(35);
+  await expect(handles.first()).toBeHidden();
+  await page.locator("#reorder-identities").click();
+  await expect(page.locator("#identity-form")).toHaveJSProperty("inert", true);
+  const box = await handles.first().boundingBox();
+  expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize().width);
+  await handles.first().press("ArrowDown");
+  await page.locator("#cancel-identity-reorder").click();
+  expect(saved).toBeUndefined();
+  await expect(page.locator("#identity-rows tr").first()).toHaveAttribute("data-code", "general");
+  await page.locator("#reorder-identities").click();
+  await handles.last().press("ArrowUp");
+  await handles.first().press("ArrowDown");
+  await page.locator("#identity-rows").evaluate((element) => element.scrollIntoView({ block: "center" }));
+  const from = await handles.nth(2).boundingBox();
+  const to = await page.locator("#identity-rows tr").first().boundingBox();
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + from.width / 2, to.y + 3, { steps: 8 });
+  await page.mouse.up();
+  const expected = await page.locator("#identity-rows tr").evaluateAll((rows) => rows.map((row) => row.dataset.code));
+  expect(expected).toEqual(["child", "student", "general", "inactive", "preschool"]);
+  // An unsaved tick in 接待設定 survives the redraw that brings the new order there.
+  await page.locator('#hosting-identities input[value="student"]').evaluate((input) => { input.checked = true; });
+  await page.locator("#reorder-identities").click();
+  await expect(page.locator("#message")).toHaveText("身分排序已儲存。");
+  expect(saved).toEqual(expected);
+  expect(await page.locator("#hosting-identities input").evaluateAll((inputs) => inputs.map((input) => [input.value, input.checked])))
+    .toEqual([["child", false], ["student", true], ["general", true], ["preschool", false]]);
+  expect(await page.locator('#new-registration-form select[name="meal_identity"] option').evaluateAll((options) => options.map((option) => option.value)))
+    .toEqual(["", "child", "student", "general", "preschool"]);
+  await page.reload();
+  await go(page, "身分別");
+  await expect(page.locator("#identity-rows tr").first()).toHaveAttribute("data-code", "child");
+  await expect(page.locator('#new-registration-form select[name="meal_identity"] option').filter({ hasText: "停用身分" })).toHaveCount(0);
+});
+
+for (const status of [503, 409]) {
+  test(`identity reorder handles ${status} without losing a retry or stale-list recovery`, async ({ page }) => {
+    let attempts = 0;
+    await mockStaff(page, "admin", () => {}, "測試登記", {
+      reorder_identities: () => ++attempts === 1
+        ? { status, json: { error: "排序儲存失敗" } } : { json: { success: true } },
+    });
+    await login(page, "身分別");
+    await page.locator("#reorder-identities").click();
+    await page.locator("#identity-rows .drag-handle").first().press("ArrowDown");
+    await page.locator("#reorder-identities").click();
+    if (status === 503) {
+      await expect(page.locator("#message")).toHaveText("排序儲存失敗");
+      await expect(page.locator("#reorder-identities")).toHaveText("完成排序");
+      await page.locator("#reorder-identities").click();
+      await expect(page.locator("#message")).toHaveText("身分排序已儲存。");
+    } else {
+      await expect(page.locator("#message")).toContainText("已重新載入");
+      await expect(page.locator("#reorder-identities")).toHaveText("調整排序");
+      await expect(page.locator("#identity-rows tr").first()).toHaveAttribute("data-code", "general");
+    }
+  });
+}
+
+test("identity reorder supports touch pointers and locks rows during save", async ({ page }) => {
+  await mockStaff(page, "admin");
+  await login(page, "身分別");
+  await page.locator("#reorder-identities").click();
+  await page.locator("#identity-rows").evaluate((element) => element.scrollIntoView({ block: "center" }));
+  await page.locator("#identity-rows .drag-handle").last().evaluate((handle) => {
+    const target = document.querySelector("#identity-rows tr").getBoundingClientRect();
+    const x = handle.getBoundingClientRect().x + 10;
+    handle.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch", pointerId: 9, isPrimary: true, button: 0, buttons: 1 }));
+    window.dispatchEvent(new PointerEvent("pointermove", { pointerType: "touch", pointerId: 9, buttons: 1, clientX: x, clientY: target.y + 2 }));
+    window.dispatchEvent(new PointerEvent("pointerup", { pointerType: "touch", pointerId: 9 }));
+  });
+  await expect(page.locator("#identity-rows tr").first()).toHaveAttribute("data-code", "preschool");
+  let saveRoute;
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "reorder_identities") saveRoute = route;
+    else await route.fallback();
+  });
+  await page.locator("#reorder-identities").click();
+  await expect(page.locator("#identity-rows")).toHaveJSProperty("inert", true);
+  await expect(page.locator("#cancel-identity-reorder")).toBeDisabled();
+  await expect.poll(() => Boolean(saveRoute)).toBe(true);
+  await saveRoute.fulfill({ json: { success: true } });
+  await expect(page.locator("#message")).toHaveText("身分排序已儲存。");
+});
+
 test("activities can be reordered by dragging or arrow keys and saved together", async ({ page }) => {
   let saved;
   await mockStaff(page, "admin", (payload) => { if (payload.action === "reorder_activities") saved = payload; }, "測試登記", {
@@ -934,7 +1039,7 @@ test("the reorder buttons are fully on screen: in the table header on wide scree
   };
   await page.locator("#admin-activities").scrollIntoViewIfNeeded();
   const button = await onScreen("調整排序");
-  const phoneLayout = await page.locator(".reorder-buttons").evaluate((element) => getComputedStyle(element).position === "absolute");
+  const phoneLayout = await page.locator("#admin-activities .reorder-buttons").evaluate((element) => getComputedStyle(element).position === "absolute");
   if (!phoneLayout) {
     const row = await page.locator("#admin-activities thead tr").boundingBox();
     expect(row.x + row.width - (button.x + button.width)).toBeLessThan(24);

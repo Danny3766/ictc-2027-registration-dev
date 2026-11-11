@@ -262,7 +262,13 @@
             </div>
           </form>
           <p class="hint">已使用的身分只能停用；一般與兩種兒童身分保留。兒童身分依兒童類型自動帶入。</p>
-          <div class="table-scroll"><table><thead><tr><th>身分</th><th>狀態</th><th>開放選擇</th><th>標籤</th><th>操作</th></tr></thead><tbody id="identity-rows"></tbody></table></div>
+          <p id="identity-reorder-hint" class="hint" hidden>拖曳右側 ☰ 調整順序，或聚焦 ☰ 後按 ↑ ↓；完成後按「完成排序」儲存。</p>
+          <p id="identity-reorder-status" class="visually-hidden" role="status"></p>
+          <div class="table-scroll"><table><thead><tr><th>身分</th><th>狀態</th><th>開放選擇</th><th>標籤</th><th>操作</th>
+            <th class="reorder-col" abbr="排序"><span class="visually-hidden">排序</span><div class="reorder-buttons">
+              <button id="reorder-identities" type="button" class="secondary">調整排序</button>
+              <button id="cancel-identity-reorder" type="button" class="secondary" hidden>取消</button>
+            </div></th></tr></thead><tbody id="identity-rows"></tbody></table></div>
         </section>
 
         <section id="admin-activities" class="card" data-view="admin-activities" hidden>
