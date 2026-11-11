@@ -33,8 +33,7 @@ begin
     is_lookup_open = true, is_hosting_open = true, is_pickup_open = true where id;
   update public.registration_create_limits set window_started_at = now(), created_count = 0 where id;
   select coalesce(jsonb_agg(jsonb_build_object('activity_id', id, 'attending', false)), '[]')
-  into v_others from public.activities where is_published and student_fee_amount is null;
-  update public.activities set is_published = false where is_published and student_fee_amount is not null;
+  into v_others from public.activities where is_published;
   insert into public.activities (category, title, audience, is_published, sort_order)
   values ('other', '兒童驗證開家限定', 'hosting', true, 9201) returning id into v_hosting;
   insert into public.activities (category, title, audience, is_published, sort_order)
@@ -49,24 +48,23 @@ begin
     jsonb_build_object('activity_id', v_first, 'attending', false),
     jsonb_build_object('activity_id', v_second, 'attending', false));
 
-  -- 1. Both surveys open: a child attends both restricted activities and stores 否 for both.
+  -- 1. Both surveys open: a child attends both restricted activities and leaves both surveys unanswered.
   perform public.create_registration_with_pickup(gen_random_uuid(), '兒童驗證甲' || v_tag, v_district,
-    v_choices, null, null, null, 'elementary', '  ' || v_parent || '  ');
+    v_choices, null, 'child', null, null, '  ' || v_parent || '  ');
   select * into v_row from public.registrations where full_name = '兒童驗證甲' || v_tag;
-  if not v_row.is_child or v_row.parent_name <> v_parent then raise exception 'CHILD_NOT_SAVED'; end if;
-  if public.registration_hosting_get(v_row.id)->>'status' <> 'not_hosting'
-    or public.registration_pickup_get(v_row.id) <> '{"status":"no","count":0}' then
-    raise exception 'CHILD_ANSWERS_NOT_NO';
+  if not v_row.is_child or v_row.parent_name is distinct from v_parent then raise exception 'CHILD_NOT_SAVED'; end if;
+  if public.registration_hosting_get(v_row.id) is not null or public.registration_pickup_get(v_row.id) is not null then
+    raise exception 'CHILD_UNASKED_ANSWERS_NOT_EMPTY';
   end if;
-  if current_setting('registration.saving_child', true) <> '' then raise exception 'CHILD_FLAG_LEFT_ON'; end if;
+  if current_setting('registration.saving_child', true) is distinct from '' then raise exception 'CHILD_FLAG_LEFT_ON'; end if;
 
   -- 2. The same restricted choices still fail for an adult answering 否, also after a child's save.
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), '兒童驗證成人' || v_tag, v_district,
-      v_choices, '{"status":"not_hosting"}', null, '{"status":"no","count":0}');
+      v_choices, '{"status":"not_hosting"}', 'general', '{"status":"no","count":0}');
     raise exception 'ADULT_RESTRICTION_SKIPPED';
   exception when raise_exception then
-    if sqlerrm <> 'AUDIENCE_RESTRICTED' then raise; end if;
+    if sqlerrm is distinct from 'AUDIENCE_RESTRICTED' then raise; end if;
   end;
 
   -- 3. An activity prerequisite still applies to a child.
@@ -75,37 +73,36 @@ begin
       v_others || jsonb_build_array(jsonb_build_object('activity_id', v_hosting, 'attending', false),
         jsonb_build_object('activity_id', v_pickup, 'attending', false),
         jsonb_build_object('activity_id', v_first, 'attending', false),
-        jsonb_build_object('activity_id', v_second, 'attending', true)), null, null, null, 'elementary', v_parent);
+        jsonb_build_object('activity_id', v_second, 'attending', true)), null, 'child', null, null, v_parent);
     raise exception 'CHILD_PREREQUISITE_SKIPPED';
   exception when raise_exception then
-    if sqlerrm <> 'AUDIENCE_RESTRICTED' then raise; end if;
+    if sqlerrm is distinct from 'AUDIENCE_RESTRICTED' then raise; end if;
   end;
 
   -- 4. The parent name is required, 20 characters at most after trimming.
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), '兒童驗證乙' || v_tag, v_district,
-      v_choices, null, null, null, 'elementary', '   ');
+      v_choices, null, 'child', null, null, '   ');
     raise exception 'EMPTY_PARENT_ACCEPTED';
   exception when invalid_parameter_value then
-    if sqlerrm <> 'INVALID_PARENT_NAME' then raise; end if;
+    if sqlerrm is distinct from 'INVALID_PARENT_NAME' then raise; end if;
   end;
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), '兒童驗證乙' || v_tag, v_district,
-      v_choices, null, null, null, 'elementary', repeat('名', 21));
+      v_choices, null, 'child', null, null, repeat('名', 21));
     raise exception 'LONG_PARENT_ACCEPTED';
   exception when invalid_parameter_value then
-    if sqlerrm <> 'INVALID_PARENT_NAME' then raise; end if;
+    if sqlerrm is distinct from 'INVALID_PARENT_NAME' then raise; end if;
   end;
 
-  -- 5. Both surveys closed: a child still stores 否 for both; a second child names the same parent
+  -- 5. Both surveys closed: a child still leaves both surveys unanswered; a second child names the same parent
   --    with other case and spacing.
   update public.site_settings set is_hosting_open = false, is_pickup_open = false where id;
   perform public.create_registration_with_pickup(gen_random_uuid(), '兒童驗證乙' || v_tag, v_district,
-    v_choices, null, null, null, 'elementary', ' ' || replace(v_parent, '家長', '家 長'));
+    v_choices, null, 'child', null, null, ' ' || replace(v_parent, '家長', '家 長'));
   select * into v_row from public.registrations where full_name = '兒童驗證乙' || v_tag;
-  if public.registration_hosting_get(v_row.id)->>'status' <> 'not_hosting'
-    or public.registration_pickup_get(v_row.id)->>'status' <> 'no' then
-    raise exception 'CLOSED_CHILD_ANSWERS_NOT_NO';
+  if public.registration_hosting_get(v_row.id) is not null or public.registration_pickup_get(v_row.id) is not null then
+    raise exception 'CLOSED_CHILD_UNASKED_ANSWERS_NOT_EMPTY';
   end if;
 
   -- 6. The parent registers; the 親子 lookup finds both children in the same district only.
@@ -115,13 +112,13 @@ begin
       jsonb_build_object('activity_id', v_pickup, 'attending', true),
       jsonb_build_object('activity_id', v_first, 'attending', false),
       jsonb_build_object('activity_id', v_second, 'attending', false)),
-    '{"status":"hosting","guest_type":"any","guest_count":2}', null, '{"status":"yes","count":3}');
+    '{"status":"hosting","guest_type":"any","guest_count":2}', 'general', '{"status":"yes","count":3}');
   perform public.create_registration_with_pickup(gen_random_uuid(), '兒童驗證別區' || v_tag, v_other_district,
-    v_choices, null, null, null, 'elementary', v_parent);
+    v_choices, null, 'child', null, null, v_parent);
   select array_agg(c.serial_no order by c.serial_no) into v_serials
   from public.registration_children(jsonb_build_array(jsonb_build_object('district_id', v_district,
     'name_key', public.registration_name_key(v_parent)))) c;
-  if v_serials <> (select array_agg(serial_no order by serial_no) from public.registrations
+  if v_serials is distinct from (select array_agg(serial_no order by serial_no) from public.registrations
       where full_name in ('兒童驗證甲' || v_tag, '兒童驗證乙' || v_tag)) then
     raise exception 'CHILDREN_LOOKUP_WRONG %', v_serials;
   end if;
@@ -129,17 +126,17 @@ begin
   -- 7. A voided child drops out of the lookup.
   update public.registrations set record_status = 'void' where full_name = '兒童驗證乙' || v_tag;
   if (select count(*) from public.registration_children(jsonb_build_array(jsonb_build_object(
-      'district_id', v_district, 'name_key', public.registration_name_key(v_parent))))) <> 1 then
+      'district_id', v_district, 'name_key', public.registration_name_key(v_parent))))) is distinct from 1 then
     raise exception 'VOID_CHILD_LISTED';
   end if;
 
-  -- 8. The adult becomes a child on the public page: 否 replaces 是 and the import needs redoing.
+  -- 8. The adult becomes a child on the public page: both surveys become a valid 否 and the import needs redoing.
   update public.registrations set import_status = 'imported' where full_name = v_parent;
-  perform public.update_registration_with_pickup(v_parent, v_district, v_choices, null, null, null, 'elementary', '另一位家長');
+  perform public.update_registration_with_pickup(v_parent, v_district, v_choices, null, 'child', null, null, '另一位家長');
   select * into v_row from public.registrations where full_name = v_parent;
-  if not v_row.is_child or v_row.parent_name <> '另一位家長' or v_row.import_status <> 'reimport_needed'
-    or public.registration_hosting_get(v_row.id)->>'status' <> 'not_hosting'
-    or public.registration_pickup_get(v_row.id)->>'status' <> 'no' then
+  if not v_row.is_child or v_row.parent_name is distinct from '另一位家長' or v_row.import_status is distinct from 'reimport_needed'
+    or public.registration_hosting_get(v_row.id) is distinct from public.registration_hosting_value('{"status":"not_hosting"}')
+    or public.registration_pickup_get(v_row.id) is distinct from '{"status":"no","count":0}' then
     raise exception 'BECOME_CHILD_WRONG';
   end if;
   if not exists (select 1 from public.audit_events where target_id = v_row.id and action = 'registration.child_updated'
@@ -147,16 +144,15 @@ begin
     raise exception 'CHILD_AUDIT_MISSING';
   end if;
 
-  -- 9. An older page sends no child fields and a hosting answer: the child stays, answers stay 否.
-  perform public.update_registration_with_pickup(v_parent, v_district, v_choices,
-    '{"status":"hosting","guest_type":"any","guest_count":2}', null, '{"status":"yes","count":3}');
+  -- 9. An older page sends no child fields and no answers: the child and both 否 stay.
+  perform public.update_registration_with_pickup(v_parent, v_district, v_choices, null, null, null);
   select * into v_row from public.registrations where full_name = v_parent;
-  if not v_row.is_child or v_row.parent_name <> '另一位家長'
-    or public.registration_hosting_get(v_row.id)->>'status' <> 'not_hosting'
-    or public.registration_pickup_get(v_row.id)->>'status' <> 'no' then
+  if not v_row.is_child or v_row.parent_name is distinct from '另一位家長'
+    or public.registration_hosting_get(v_row.id)->>'status' is distinct from 'not_hosting'
+    or public.registration_pickup_get(v_row.id)->>'status' is distinct from 'no' then
     raise exception 'OLDER_PAGE_CHANGED_CHILD';
   end if;
-  if public.get_registration_child(v_parent, v_district) <> '{"is_child":true,"child_type":"elementary","parent_name":"另一位家長"}' then
+  if public.get_registration_child(v_parent, v_district) is distinct from '{"is_child":true,"child_type":"elementary","parent_name":"另一位家長"}' then
     raise exception 'LOOKUP_CHILD_WRONG';
   end if;
 
@@ -166,28 +162,28 @@ begin
       jsonb_build_object('activity_id', v_pickup, 'attending', false),
       jsonb_build_object('activity_id', v_first, 'attending', false),
       jsonb_build_object('activity_id', v_second, 'attending', false)),
-    '{"status":"not_hosting"}', null, '{"status":"no","count":0}', '', '不該存下');
+    '{"status":"not_hosting"}', 'general', '{"status":"no","count":0}', null, '不該存下');
   select * into v_row from public.registrations where full_name = v_parent;
   if v_row.is_child or v_row.parent_name is not null then raise exception 'BECOME_ADULT_WRONG'; end if;
 
   -- 11. Staff: a child created while both surveys are closed, then saved by an older page.
   update public.site_settings set is_hosting_open = false, is_pickup_open = false where id;
   select registration_id into v_id from public.staff_create_registration_with_pickup(v_admin, gen_random_uuid(),
-    '兒童驗證協助' || v_tag, v_district, v_choices, null, null, null, 'elementary', v_parent);
+    '兒童驗證協助' || v_tag, v_district, v_choices, null, 'child', null, null, v_parent);
   perform public.staff_update_registration_with_pickup(v_admin, v_id, '兒童驗證協助' || v_tag, v_other_district,
     v_choices, '{"status":"hosting","guest_type":"any","guest_count":2}', null, '{"status":"yes","count":3}');
   select * into v_row from public.registrations where id = v_id;
-  if not v_row.is_child or v_row.parent_name <> v_parent or v_row.district_id <> v_other_district
-    or public.registration_hosting_get(v_id)->>'status' <> 'not_hosting'
-    or public.registration_pickup_get(v_id)->>'status' <> 'no' then
+  if not v_row.is_child or v_row.parent_name is distinct from v_parent or v_row.district_id is distinct from v_other_district
+    or public.registration_hosting_get(v_id)->>'status' is distinct from 'hosting'
+    or public.registration_pickup_get(v_id)->>'status' is distinct from 'yes' then
     raise exception 'STAFF_CHILD_WRONG';
   end if;
   begin
     perform public.staff_update_registration_with_pickup(v_admin, v_id, '兒童驗證協助' || v_tag, v_other_district,
-      v_choices, null, null, null, 'elementary', '');
+      v_choices, null, 'child', null, null, '');
     raise exception 'STAFF_EMPTY_PARENT_ACCEPTED';
   exception when invalid_parameter_value then
-    if sqlerrm <> 'INVALID_PARENT_NAME' then raise; end if;
+    if sqlerrm is distinct from 'INVALID_PARENT_NAME' then raise; end if;
   end;
 
   -- 12. The table refuses a parent name without a child, or a child without one.

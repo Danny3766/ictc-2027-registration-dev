@@ -230,6 +230,7 @@
             <div class="registration-columns registration-split">
               <div class="registration-main">
                 <label class="check"><input name="is_hosting_open" type="checkbox" /> 開放開家接待調查</label>
+                <fieldset id="hosting-identities" hidden><legend>公開頁可填開家接待的身分別</legend><div class="survey-identities"></div></fieldset>
                 <p class="hint">開關只影響公開登記頁與查詢頁；後台的登記資料與協助登記一律可以填寫與修改接待。截止時間與登記共用。</p>
               </div>
               <label>說明文字（顯示在公開頁接待區塊上方，例如接待期間；請勿填寫個人聯絡資料）<textarea name="hosting_description" maxlength="2000"></textarea></label>
@@ -237,6 +238,7 @@
             <div class="registration-columns registration-split">
               <div class="registration-main">
                 <label class="check"><input name="is_pickup_open" type="checkbox" /> 開放接機接待調查</label>
+                <fieldset id="pickup-identities" hidden><legend>公開頁可填接機接待的身分別</legend><div class="survey-identities"></div></fieldset>
                 <p class="hint">接機與開家分別開放；同一台車只需一人填寫可接機位數。</p>
               </div>
               <label>接機說明文字（顯示在公開頁接機題目上方；請勿填寫個人聯絡資料）<textarea name="pickup_description" maxlength="2000"></textarea></label>
@@ -277,6 +279,7 @@
               <label>類型<select name="category"><option value="meeting">聚會</option><option value="meal">用餐</option><option value="other">其他</option></select></label>
               <label class="grow">名稱<input name="title" maxlength="200" required /></label>
               <label class="check"><input name="is_published" type="checkbox" /> 公開活動</label>
+              <label class="check"><input name="affects_conference_import" type="checkbox" /> 影響大會匯入狀態</label>
             </div>
             <div class="field-row">
               <label class="pair">開始日期<input name="starts_on" type="date" /></label>

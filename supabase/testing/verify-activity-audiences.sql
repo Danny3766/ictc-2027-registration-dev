@@ -1,10 +1,12 @@
 -- 活動報名對象：接機與前置活動（202611060002）的資料庫驗證。
--- 在測試專案 SQL Editor 執行；整個驗證交易最後回滾。只使用本腳本新增的虛構活動，
+-- 也驗證後台新增／修改同樣受限，以及活動改為限定後既有報名的處理。
+-- 在測試專案 SQL Editor 執行；需要一位已改過初始密碼的有效管理員。整個驗證交易最後回滾。只使用本腳本新增的虛構活動，
 -- 不改動既有活動的報名對象。姓名與活動名稱都是虛構的。
 begin;
 
 do $$
 declare
+  v_admin uuid;
   v_district integer;
   v_id uuid;
   v_name text := '對象驗證-' || substr(gen_random_uuid()::text, 1, 8);
@@ -20,6 +22,9 @@ begin
   end if;
   select id into v_district from public.districts order by sort_order limit 1;
   if v_district is null then raise exception 'TEST_DATA_NOT_READY'; end if;
+  select auth_user_id into v_admin from public.staff_profiles
+    where role = 'admin' and is_active and not must_change_password limit 1;
+  if v_admin is null then raise exception 'TEST_ADMIN_REQUIRED'; end if;
 
   update public.site_settings set is_registration_open = true, is_lookup_open = true,
     registration_deadline_at = null, is_pickup_open = true, is_hosting_open = false where id;
@@ -48,13 +53,13 @@ begin
   end if;
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), v_name || '-no',
-      v_district, v_choices, null, null, '{"status":"no","count":0}');
+      v_district, v_choices, null, 'general', '{"status":"no","count":0}');
     raise exception 'PICKUP_NO_SAVED';
   exception when raise_exception then
     if sqlerrm <> 'AUDIENCE_RESTRICTED' then raise; end if;
   end;
   select registration_id into v_id from public.create_registration_with_pickup(
-    gen_random_uuid(), v_name, v_district, v_choices, null, null, '{"status":"yes","count":1}');
+    gen_random_uuid(), v_name, v_district, v_choices, null, 'general', '{"status":"yes","count":1}');
   if v_id is null then raise exception 'PICKUP_YES_NOT_SAVED'; end if;
   begin
     perform public.update_registration_with_pickup(v_name, v_district, v_choices,
@@ -65,10 +70,41 @@ begin
   end;
   -- A closed survey still counts the stored 是.
   update public.site_settings set is_pickup_open = false where id;
-  if not public.update_registration_with_pickup(v_name, v_district, v_choices, null, null, null) then
+  if not public.update_registration_with_pickup(v_name, v_district, v_choices, null, 'general', null) then
     raise exception 'STORED_PICKUP_REJECTED';
   end if;
   update public.site_settings set is_pickup_open = true where id;
+
+  -- Staff creation enforces the audience too.
+  begin
+    perform public.staff_create_registration_with_pickup(v_admin, gen_random_uuid(), v_name || '-staff',
+      v_district, v_choices, null, 'general', '{"status":"no","count":0}');
+    raise exception 'STAFF_CREATE_NOT_ENFORCED';
+  exception when raise_exception then
+    if sqlerrm <> 'AUDIENCE_RESTRICTED' then raise; end if;
+  end;
+  -- Open first, restricted later: the earlier sign-up stays until the next save, which must drop it.
+  update public.activities set audience = 'all' where id = v_pickup;
+  select registration_id into v_id from public.create_registration_with_pickup(
+    gen_random_uuid(), v_name || '-early', v_district, v_choices, null, 'general', '{"status":"no","count":0}');
+  update public.activities set audience = 'pickup' where id = v_pickup;
+  if not exists (select 1 from public.registration_choices
+      where registration_id = v_id and activity_id = v_pickup and attending) then
+    raise exception 'EARLIER_SIGN_UP_CHANGED';
+  end if;
+  begin
+    perform public.update_registration_with_pickup(v_name || '-early', v_district, v_choices, null, 'general', null);
+    raise exception 'PUBLIC_UPDATE_NOT_ENFORCED';
+  exception when raise_exception then
+    if sqlerrm <> 'AUDIENCE_RESTRICTED' then raise; end if;
+  end;
+  begin
+    perform public.staff_update_registration_with_pickup(v_admin, v_id, v_name || '-early', v_district,
+      v_choices, null, 'general', null);
+    raise exception 'STAFF_UPDATE_NOT_ENFORCED';
+  exception when raise_exception then
+    if sqlerrm <> 'AUDIENCE_RESTRICTED' then raise; end if;
+  end;
 
   -- Activity audience: the published prerequisite must be attended.
   if public.registration_audience_valid(v_others || jsonb_build_array(

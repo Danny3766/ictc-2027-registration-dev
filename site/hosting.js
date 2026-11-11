@@ -29,6 +29,7 @@ const Hosting = (() => {
       status: value.status,
       guest_type: hosting ? value.guest_type || null : null,
       guest_count: hosting && value.guest_count ? Number(value.guest_count) : null,
+      ...(value.answer_valid === false && { answer_valid: false }),
     };
   }
 
@@ -37,7 +38,7 @@ const Hosting = (() => {
     if (!answer) return "未回覆";
     let hosting = statusLabels[answer.status];
     if (answer.status === "hosting") hosting = `是，可接待 ${answer.guest_count} 位（${guestLabels[answer.guest_type]}）`;
-    return hosting;
+    return answer.answer_valid === false ? `未回覆（先前紀錄：${hosting}，須重新回答）` : hosting;
   }
 
   // Shows the guest dropdowns (.hosting-details) only for 是; hidden ones are disabled so they neither
@@ -54,7 +55,7 @@ const Hosting = (() => {
   function render(container, value = null, required = true) {
     container.innerHTML = markup(container.id);
     container.dataset.hosting = "";
-    const answer = normalize(value);
+    const answer = value?.answer_valid === false ? null : normalize(value);
     for (const radio of container.querySelectorAll('[name="hosting_status"]')) {
       radio.required = required;
       radio.checked = radio.value === answer?.status;
@@ -80,5 +81,5 @@ const Hosting = (() => {
     if (container) sync(container);
   }, true);
 
-  return { statusLabels, guestLabels, normalize, summary, render, read };
+  return { statusLabels, guestLabels, normalize, summary, render, read, sync };
 })();

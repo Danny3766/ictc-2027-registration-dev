@@ -88,7 +88,12 @@ test("create and update map database errors alike; a survey that opened carries 
     return reply && { status: reply.status, body: await reply.json() };
   };
   assert.deepEqual(await mapped("PICKUP_REQUIRED", database({ pickup_description: "說明" })),
-    { status: 409, body: { error: "接機接待調查已開放，請回答是否可以接機；看不到接機欄位時請重新整理頁面", code: "PICKUP_REQUIRED", pickup_description: "說明" } });
+    { status: 409, body: { error: "接機接待調查已開放，請回答是否可以接機；看不到接機欄位時請重新整理頁面", code: "PICKUP_REQUIRED", pickup_description: "說明", survey_settings: { pickup_description: "說明" } } });
+  const settings = { hosting_identity_codes: ["general"], pickup_identity_codes: ["student"], is_hosting_open: true, is_pickup_open: true };
+  const denied = await mapped("PICKUP_NOT_ALLOWED", database(settings));
+  assert.equal(denied.status, 409);
+  assert.equal(denied.body.code, "PICKUP_NOT_ALLOWED");
+  assert.deepEqual(denied.body.survey_settings, settings);
   assert.equal((await mapped("HOSTING_REQUIRED", database({ hosting_description: "說明" }))).body.hosting_description, "說明");
   // A failed read leaves the description out, so the page keeps the one it has.
   assert.equal("pickup_description" in (await mapped("PICKUP_REQUIRED", database(null, { message: "down" }))).body, false);

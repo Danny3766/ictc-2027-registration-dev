@@ -259,7 +259,7 @@ export async function handler(request) {
     if (body.children_only !== undefined && body.children_only !== true) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
       .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,meal_identity,is_child,child_type,parent_name,name_key"
-        + (beforeSerial !== null || !body.summary ? ",registration_choices(activity_id,attending),registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)" : ""),
+        + (beforeSerial !== null || !body.summary ? ",registration_choices(activity_id,attending),registration_hosting(status,guest_type,guest_count,answer_valid),registration_pickup(status,count,answer_valid)" : ""),
         beforeSerial === null && !body.skip_count ? { count: "exact" } : undefined)
       .order("serial_no", { ascending: false });
     // 10 rows a page, matching REGISTRATIONS_PER_PAGE in site/admin/staff.js.
@@ -293,9 +293,9 @@ export async function handler(request) {
 
   if (body.action === "list_reference" || body.action === "me" && body.include_reference) {
     const [settings, districts, activities, program, identities, usedIdentities] = await Promise.all([
-      database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_lookup_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description").single(),
+      database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_lookup_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description,hosting_identity_codes,pickup_identity_codes").single(),
       database.from("districts").select("id,name,sort_order").order("sort_order"),
-      database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),cost_amount,audience,audience_note,is_published,sort_order").order("sort_order"),
+      database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),cost_amount,audience,audience_note,is_published,affects_conference_import,sort_order").order("sort_order"),
       database.from("program_items").select("id,event_date,start_time,end_time,title,note,sort_order,is_visible").order("sort_order"),
       database.from("registration_identities").select("code,name,is_active,public_selectable,show_badge,badge_color").order("sort_order"),
       database.rpc("registration_used_identity_codes"),
@@ -410,6 +410,9 @@ export async function handler(request) {
     });
     if (error) {
       if (lostAccess(error)) return lostAccessResponse();
+      if (error.message?.includes("IDENTITY_IN_SURVEY_TARGETS")) {
+        return response({ error: "此身分已設為接待調查可填身分，請先在開家與接機接待設定取消勾選" }, 400);
+      }
       // 23503: a registration took the identity between the check and the delete.
       if (error.message?.includes("IDENTITY_IN_USE") || (body.kind === "delete_identity" && error.code === "23503")) {
         return response({ error: "身分已使用或為系統保留，請改為停用" }, 400);
@@ -423,6 +426,7 @@ export async function handler(request) {
       if (error.message?.includes("ACTIVITY_AUDIENCE_NOT_FOUND")) {
         return response({ error: "報名對象指定的活動不存在，請重新整理頁面" }, 400);
       }
+      if (error.message?.includes("INVALID_SURVEY_IDENTITIES")) return response({ error: "請至少選擇一個有效的可填寫身分別" }, 400);
       // Settings also fail on check, not-null and bad date/time input.
       if (isInputError(error) || ["23514", "23502", "22007", "22008"].includes(error.code)) {
         return response({ error: "請檢查設定內容" }, 400);

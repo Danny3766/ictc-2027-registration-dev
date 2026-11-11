@@ -65,8 +65,8 @@ const labels = {
 const label = (group, value) => labels[group][value] ?? value;
 
 // registration_id is the hosting table's primary key, so the API embeds the one row as an object.
-const hostingOf = (registration) => Hosting.normalize(registration.registration_hosting);
-const pickupOf = (registration) => Pickup.normalize(registration.registration_pickup);
+const hostingOf = (registration) => registration.registration_hosting?.answer_valid === false ? null : Hosting.normalize(registration.registration_hosting);
+const pickupOf = (registration) => registration.registration_pickup?.answer_valid === false ? null : Pickup.normalize(registration.registration_pickup);
 const attends = (registration, activity) =>
   registration.registration_choices.some((choice) => choice.activity_id === activity.id && choice.attending);
 const priced = (activity) => activity.fee_amount != null || activity.student_fee_amount != null
@@ -469,6 +469,7 @@ function renderReference() {
     registration_deadline_at: taipeiInput(reference.settings.registration_deadline_at),
   }, false);
   fillForm(document.querySelector("#hosting-settings-form"), reference.settings, false);
+  renderSurveyIdentities();
   setAudienceOptions(document.querySelector("#activity-form").dataset.editingId);
   renderIdentities();
   renderIdentityPrices();
@@ -476,12 +477,45 @@ function renderReference() {
   renderNewRegistrationForm();
 }
 
+function syncSurveyIdentitySettings() {
+  const form = document.querySelector("#hosting-settings-form");
+  for (const kind of ["hosting", "pickup"]) {
+    document.querySelector(`#${kind}-identities`).hidden = !form.elements[`is_${kind}_open`].checked;
+  }
+}
+
+function renderSurveyIdentities() {
+  for (const kind of ["hosting", "pickup"]) {
+    const selected = reference.settings[`${kind}_identity_codes`] ?? ["general"];
+    const container = document.querySelector(`#${kind}-identities .survey-identities`);
+    container.replaceChildren();
+    for (const identity of reference.identities ?? []) {
+      if (!(identity.is_active && identity.public_selectable) && !selected.includes(identity.code)) continue;
+      const option = document.createElement("label"); option.className = "check";
+      const input = document.createElement("input"); input.type = "checkbox";
+      input.name = `${kind}_identity_codes`; input.value = identity.code; input.checked = selected.includes(identity.code);
+      option.append(input, identity.name + (!identity.is_active ? "（已停用）" : !identity.public_selectable ? "（僅後台可選）" : ""));
+      container.append(option);
+    }
+  }
+  syncSurveyIdentitySettings();
+}
+document.querySelector("#hosting-settings-form").addEventListener("input", syncSurveyIdentitySettings);
+
 async function saveReference(event, kind) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = Object.fromEntries(new FormData(form));
+  if (kind === "hosting") {
+    for (const survey of ["hosting", "pickup"]) {
+      data[`${survey}_identity_codes`] = [...form.querySelectorAll(`[name="${survey}_identity_codes"]:checked`)].map((input) => input.value);
+      if (form.elements[`is_${survey}_open`].checked && !data[`${survey}_identity_codes`].length) {
+        return showMessage("請至少選擇一個可填寫的身分別", true);
+      }
+    }
+  }
   if (form.dataset.editingId) data.id = form.dataset.editingId;
-  for (const name of ["is_registration_open", "is_lookup_open", "is_hosting_open", "is_pickup_open", "is_published", "is_visible"]) {
+  for (const name of ["is_registration_open", "is_lookup_open", "is_hosting_open", "is_pickup_open", "is_published", "affects_conference_import", "is_visible"]) {
     if (form.elements.namedItem(name)) data[name] = form.elements.namedItem(name).checked;
   }
   if (kind === "settings") data.registration_deadline_at = taipeiTimestamp(data.registration_deadline_at);
@@ -515,7 +549,7 @@ async function saveReference(event, kind) {
     let outside;
     try {
       outside = activeRegistrations(await allRegistrations()).filter((registration) => attends(registration, edited)
-        && !Meals.eligible(data, { skipsHosting: !Meals.answersHosting(registration.meal_identity ?? "general"), hostingStatus: hostingOf(registration)?.status,
+        && !Meals.eligible(data, { skipsHosting: !Meals.answersHosting(registration.meal_identity ?? "general"), skipsPickup: !Meals.answersHosting(registration.meal_identity ?? "general", "pickup"), hostingStatus: hostingOf(registration)?.status,
           pickupStatus: pickupOf(registration)?.status, choices: registration.registration_choices,
           activities: reference.activities })).length;
     } catch (error) { return showMessage(error.message, true); }
@@ -524,7 +558,7 @@ async function saveReference(event, kind) {
   try {
     await api("save_reference", { kind, data });
     reference = await api("list_reference");
-    Meals.configure(reference.identities, true);
+    Meals.configure(reference.identities, true, reference.settings);
     renderReference();
     if (!["settings", "hosting"].includes(kind)) form.reset();
     showMessage("設定已儲存。");
@@ -722,9 +756,9 @@ function districtActivityCard(district, people, activities) {
 }
 
 function showHostingStatistics(statistics, count) {
-  const answers = { hosting: 0, not_hosting: 0, family_registered: 0, unanswered: 0 };
+  const answers = { hosting: 0, not_hosting: 0, family_registered: 0, unanswered: 0, not_applicable: 0 };
   const capacity = Object.fromEntries(Object.keys(Hosting.guestLabels).map((type) => [type, { registrations: 0, people: 0 }]));
-  const pickup = { yes: 0, no: 0, unanswered: 0, people: 0 };
+  const pickup = { yes: 0, no: 0, unanswered: 0, not_applicable: 0, people: 0 };
   for (const answer of statistics.hosting) {
     answers[answer.status ?? "unanswered"] += answer.registrations;
     if (answer.status !== "hosting") continue;
@@ -739,8 +773,9 @@ function showHostingStatistics(statistics, count) {
   statusRows.replaceChildren();
   for (const [status, total] of Object.entries(answers)) {
     if (status === "family_registered") continue;
+    if (status === "not_applicable" && !total) continue;
     const row = document.createElement("tr");
-    for (const value of [Hosting.statusLabels[status] ?? "未回覆", total]) cell(row, value);
+    for (const value of [status === "not_applicable" ? "不適用" : Hosting.statusLabels[status] ?? "未回覆", total]) cell(row, value);
     statusRows.append(row);
   }
   totalRow(statusRows, [count]);
@@ -754,7 +789,7 @@ function showHostingStatistics(statistics, count) {
   totalRow(capacityRows, [answers.hosting, Object.values(capacity).reduce((sum, item) => sum + item.people, 0)]);
   const pickupRows = document.querySelector("#hosting-pickup-stats-rows");
   pickupRows.replaceChildren();
-  for (const [status, count] of [["是", pickup.yes], ["否", pickup.no], ["未回覆", pickup.unanswered]]) {
+  for (const [status, count] of [["是", pickup.yes], ["否", pickup.no], ["未回覆", pickup.unanswered], ...(pickup.not_applicable ? [["不適用", pickup.not_applicable]] : [])]) {
     const row = document.createElement("tr");
     for (const value of [status, count, status === "是" ? pickup.people : 0]) cell(row, value);
     pickupRows.append(row);
@@ -827,9 +862,9 @@ async function downloadCsv() {
       childLabel(registration.child_type), registration.parent_name ?? "",
       label("import", registration.import_status),
       ...activities.map((item) => !choices.has(item.id) ? "未回覆" : choices.get(item.id) ? "參加" : "不參加"),
-      hosting ? Hosting.statusLabels[hosting.status] : "未回覆",
+      hosting ? Hosting.statusLabels[hosting.status] : Meals.answersHosting(registration.meal_identity ?? "general") ? "未回覆" : "不適用",
       hosting?.guest_type ? Hosting.guestLabels[hosting.guest_type] : "",
-      hosting?.guest_count ?? "", pickup ? Pickup.labels[pickup.status] : "", pickup?.count ?? "",
+      hosting?.guest_count ?? "", pickup ? Pickup.labels[pickup.status] : Meals.answersHosting(registration.meal_identity ?? "general", "pickup") ? "" : "不適用", pickup?.count ?? "",
       identityText(registration, activities), ...personFee(registration, activities),
     ]);
   }
@@ -869,8 +904,8 @@ function renderChoiceFields(container, choices = new Map(), requireAll = true) {
   Meals.render(container, currentActivities());
 }
 
-// Same rules as the public form: only 一般 is asked the surveys (anyone else gets 否 for both), and a
-// 兒童 needs the parent's name at the bottom. editable is false while a record is only being viewed.
+// Staff may answer either survey for every identity; children still need a parent name.
+// editable is false while a record is only being viewed.
 function syncChildFields(form, editable = true) {
   const child = Boolean(Meals.childType(form.elements.meal_identity.value));
   form.querySelector(".preschool-hint").hidden = form.elements.meal_identity.value !== "preschool";
@@ -878,9 +913,15 @@ function syncChildFields(form, editable = true) {
   form.querySelector(".parent-name").hidden = !child;
   form.elements.parent_name.disabled = !child || !editable;
   const panel = form.querySelector(".hosting-panel");
-  const skip = !Meals.answersHosting(form.elements.meal_identity.value);
-  panel.hidden = skip;
-  panel.disabled = skip || !editable;
+  panel.hidden = false;
+  panel.disabled = !editable;
+  if (form.id === "new-registration-form") {
+    for (const kind of ["hosting", "pickup"]) {
+      for (const radio of panel.querySelectorAll(`[name="${kind}_status"]`)) {
+        radio.required = Boolean(reference.settings[`is_${kind}_open`] && Meals.answersHosting(form.elements.meal_identity.value, kind));
+      }
+    }
+  }
 }
 // The parent's name to send: trimmed for a child, nothing otherwise; throws when a child has none.
 function parentNameFrom(form) {
@@ -900,6 +941,7 @@ function syncMeals(parts) {
   const [form, choices, hosting, pickup] = parts.map((selector) => document.querySelector(selector));
   Meals.sync(choices, currentActivities(), {
     skipsHosting: !Meals.answersHosting(form.elements.meal_identity.value),
+    skipsPickup: !Meals.answersHosting(form.elements.meal_identity.value, "pickup"),
     hostingStatus: hosting.querySelector('[name="hosting_status"]:checked')?.value ?? null,
     pickupStatus: Pickup.read(pickup)?.status,
   });
@@ -913,10 +955,9 @@ function registrationFields(parts) {
   const [form, , hosting, pickup] = parts.map((selector) => document.querySelector(selector));
   const data = new FormData(form);
   const parentName = parentNameFrom(form);
-  const skip = !Meals.answersHosting(form.elements.meal_identity.value);
   return {
     full_name: data.get("full_name"), district_id: Number(data.get("district_id")), choices: choicesFromForm(form),
-    hosting: skip ? null : Hosting.read(hosting), pickup: skip ? null : Pickup.read(pickup),
+    hosting: Hosting.read(hosting), pickup: Pickup.read(pickup),
     meal_identity: Meals.readIdentity(form),
     child_type: Meals.childType(form.elements.meal_identity.value), parent_name: parentName ?? undefined,
   };
@@ -943,9 +984,9 @@ function renderNewRegistrationForm() {
   renderChoiceFields(document.querySelector("#new-registration-choices"), choices, true);
   const hosting = document.querySelector("#new-registration-hosting");
   // Required only while the public survey is open, matching the public form.
-  Hosting.render(hosting, Hosting.read(hosting), Boolean(reference.settings.is_hosting_open));
+  Hosting.render(hosting, Hosting.read(hosting), Boolean(reference.settings.is_hosting_open && Meals.answersHosting(form.elements.meal_identity.value)));
   const pickup = document.querySelector("#new-registration-pickup");
-  Pickup.render(pickup, Pickup.read(pickup), Boolean(reference.settings.is_pickup_open));
+  Pickup.render(pickup, Pickup.read(pickup), Boolean(reference.settings.is_pickup_open && Meals.answersHosting(form.elements.meal_identity.value, "pickup")));
   syncChildFields(form);
   syncNewMeals();
 }
@@ -991,8 +1032,18 @@ function openRegistration(registration, editing = false) {
   const hostingFields = document.querySelector("#detail-hosting");
   Hosting.render(hostingFields, hosting, hosting !== null);
   Pickup.render(document.querySelector("#detail-pickup"), pickupOf(registration), pickupOf(registration) !== null);
+  // Invalidated history matters only where the identity is asked again, like on the public page.
+  for (const [kind, container, raw, renderer] of [
+    ["hosting", hostingFields, registration.registration_hosting, Hosting],
+    ["pickup", document.querySelector("#detail-pickup"), registration.registration_pickup, Pickup],
+  ]) {
+    if (raw?.answer_valid === false && Meals.answersHosting(registration.meal_identity ?? "general", kind)) {
+      const history = document.createElement("p"); history.className = "hint";
+      history.textContent = renderer.summary(raw); container.append(history);
+    }
+  }
   // The fieldset disables every hosting control, whatever its tag; sync() cannot re-enable them.
-  // For a child it is hidden and disabled, as the surveys are not asked.
+  // View mode disables the controls; identity does not hide staff survey fields.
   syncChildFields(form, editingRegistration);
   // Rendered after the loop above, which disables every button in view mode.
   showParentChildren(registration);
@@ -1118,7 +1169,7 @@ async function openStaff() {
   try {
     if (result.reference_error) throw new Error(result.reference_error);
     reference = result.settings ? result : await api("list_reference");
-    Meals.configure(reference.identities, true);
+    Meals.configure(reference.identities, true, reference.settings);
     // renderReference also builds the new-registration form, so it runs once either way.
     if (isAdmin) renderReference();
     else renderNewRegistrationForm();
@@ -1201,7 +1252,7 @@ async function saveIdentity(kind, data) {
   try {
     await api("save_reference", { kind, data });
     reference = await api("list_reference");
-    Meals.configure(reference.identities, true);
+    Meals.configure(reference.identities, true, reference.settings);
     renderIdentities();
     // Prices typed into an open activity form survive the redraw of its fields.
     renderIdentityPrices({ activity_identity_prices: identityPricesFrom(activityForm) });

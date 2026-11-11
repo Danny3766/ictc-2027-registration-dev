@@ -1,5 +1,23 @@
 ﻿# ICTC 2027 登記系統 TODO
 
+## 接待調查依身分開放（2026-11-11）
+
+- [x] 記錄 Q1～Q16，沿用目前分支，見 [接待身分設定](接待身分設定.md)。
+- [x] 實作資料庫、API、後台設定、公開與代填流程、有效答案及統計匯出。
+- [x] 驗證 SQL、單元測試與跨瀏覽器流程，結果與部署順序見 [接待身分設定](接待身分設定.md)。
+- [ ] 遠端測試站：關閉登記 → `202611110003_survey_identities.sql` → registration 與 staff Edge Functions → 前端 → 驗收後恢復原開放狀態。
+- [ ] 待決定：公開頁未儲存的切出再切回，要維持清空重答，還是改成不動答案並移除 `reset` 標記；見 [接待身分設定](接待身分設定.md)「待決定」第 1 項。
+- [ ] 待決定：身分加進某題可填清單時，是否比照活動報名對象先提醒受影響人數；見 [接待身分設定](接待身分設定.md)「待決定」第 2 項。
+- [ ] 上線前以新 migration 移除已無呼叫者的舊接待流程：`registration_audience_valid`（兩個多載）、`registration_skipping_hosting`、`registration_child_save`、`registration_child_answers_put`，以及 `create_registration`、`update_registration`、`staff_create_registration`、`staff_update_registration` 中 `registration.surveys_managed` 未開啟時的接待分支（該分支比對的 `registration_hosting_get` 已多帶 `answer_valid`）；`staff_save_reception_settings` 可改由 staff Edge Function 直接呼叫 `staff_save_reference`。
+
+## 大會匯入狀態調整（2026-11-11）
+
+- [x] 從 develop 建立 `feat/conference-import-status`，先記錄討論及 Q1～Q8 決策再實作。
+- [x] 活動增加匯入影響設定；回答限定勾選活動，任何身分異動觸發。
+- [x] 完成 SQL 與後台回歸測試，結果見 [大會匯入狀態驗證](大會匯入狀態驗證.md)。
+- [ ] 測試站部署：`202611110002_conference_import_status.sql` → staff Edge Function → 前端；不需更新 registration Edge Function。
+- [ ] 測試站確認後，另行發布正式環境。
+
 ## 本次新增必要範圍：後台身分別區塊調整
 
 2026-11-11 Q1～Q4 已確認，只改前端。分支 `style/identity-section`。規格見 [需求討論與決策紀錄](需求討論與決策紀錄.md) 同名最新章節。
@@ -22,7 +40,7 @@
 - [x] 查詢或修改登記：兒童提醒藍色；活動選擇說明藍色且只在修改時顯示；兩行說明改灰色區塊；查詢結果包進「登記內容」外框。
 - [x] 補 Playwright（桌機、手機）：身分切換顯示接待、報名對象、提醒區塊樣式、查詢結果外框；後台截圖確認國小標籤與藍色提醒不混淆。
 - [ ] 測試站：先執行 `preview-hosting-general-only.sql` 並請專案負責人確認受影響名單（結果含個資，不貼到 repo、PR 或對話），關閉登記後套用 `202611100004_hosting_general_only.sql`，執行 `verify-hosting-general-only.sql`，再部署前端（Edge Function 本次無變更）；正式站依正式環境 9-3 關閉登記後同樣先查名單再更新。
-- [ ] 更新過時的資料庫驗證 SQL：`verify-activity-audiences`、`verify-all-no-and-rate-limit`、`verify-child-registration`、`verify-child-type`、`verify-independent-pickup`、`verify-meal-pricing-and-audience`、`verify-registration-identities` 未帶身分別或沿用舊規則，在統一身分別之後即失敗（未套用本次 migration 也失敗）。改為帶入身分，或標示為歷史腳本不再執行。
+- [x] 更新過時的 7 支資料庫驗證 SQL，依 [資料庫驗證腳本維護](資料庫驗證腳本維護.md)：6 支修正保留，meal-pricing 搬移有效案例後退役至 historical；補公開／後台共 10 個接待欄位獨立觸發案例，13 支現行相關腳本完整通過並回滾。
 
 本機驗證：隔離 PostgreSQL 套用全部 migration，`verify-hosting-general-only.sql`、`verify-unified-identity.sql`、`verify-identity-badges.sql`、`verify-independent-identity-prices.sql` 通過；回填只改既有學生與自訂身分、一般與身分空值不變並寫審計紀錄，部署前查詢在套用後為 0 筆。24 項單元測試、四種瀏覽器 Playwright 482 項通過；4 項在並行負載下偶發失敗，重跑 32 次通過；`rls.spec` 因公司網路連不到 Supabase 未驗證。測試站與正式站尚未部署。
 
@@ -313,7 +331,7 @@ Q43 已確認。
 ## 本次新增必要範圍：用餐學生價與報名對象
 
 - [x] 本機完成：`202611050006_meal_pricing_and_audience.sql`、兩個 Edge Function、公開頁身分題與限定活動、後台活動欄位、統計與 CSV；`supabase/testing/verify-meal-pricing-and-audience.sql`、Edge Function 單元測試與四種瀏覽器的 Playwright 測試通過。
-- [ ] 測試站依序：套用 `202611050006`，再部署 `registration` 與 `staff` Edge Function，最後部署前端（舊版 Edge Function 仍可呼叫新 RPC，但讀不到新欄位）；套用後在測試站 SQL Editor 執行 `supabase/testing/verify-meal-pricing-and-audience.sql`。
+- [ ] 舊版部署待辦：`202611050006` → Edge Functions → 前端。2026-11-11 更新：舊 meal-pricing 驗證已退役，現行驗收執行 `verify-registration-identities.sql`、`verify-independent-identity-prices.sql`、`verify-hosting-general-only.sql` 與 `verify-activity-fields-and-permissions.sql`，不執行 historical 目錄腳本。
 - [ ] 部署後由管理員在後台設定三餐的一般價、學生價、實際成本，以及 2/20 午餐的報名對象；實際成本不寫入版控文件。
 - [ ] 驗收公開頁：學生價顯示、勾選有學生價的用餐才出現身分題且必填、限定活動依開家接待回答開放或退回、完成頁與查詢頁顯示身分。
 - [ ] 驗收後台：活動新欄位儲存、改為限定時的確認人數、統計的學生人數／成本／補貼、CSV 兩個新欄位；以 `anon` 直接讀取 `activities.cost_amount` 必須被拒。

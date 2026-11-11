@@ -4,12 +4,14 @@ const Pickup = (() => {
 
   function normalize(value) {
     if (!value?.status) return null;
-    return { status: value.status, count: value.status === "yes" ? Number(value.count) : 0 };
+    return { status: value.status, count: value.status === "yes" ? Number(value.count) : 0,
+      ...(value.answer_valid === false && { answer_valid: false }) };
   }
 
   function summary(value) {
     const answer = normalize(value);
-    return !answer ? "未回覆" : answer.status === "yes" ? `是，可接機 ${answer.count} 位` : "否";
+    const text = !answer ? "未回覆" : answer.status === "yes" ? `是，可接機 ${answer.count} 位` : "否";
+    return answer?.answer_valid === false ? `未回覆（先前紀錄：${text}，須重新回答）` : text;
   }
 
   function sync(container) {
@@ -31,7 +33,7 @@ const Pickup = (() => {
       </select></label>
       <p class="hint">同一台車只需一人填寫，避免重複計算。</p>`;
     container.dataset.pickup = "";
-    const answer = normalize(value);
+    const answer = value?.answer_valid === false ? null : normalize(value);
     for (const radio of container.querySelectorAll('[name="pickup_status"]')) {
       radio.required = required;
       radio.checked = radio.value === answer?.status;
@@ -52,5 +54,5 @@ const Pickup = (() => {
     if (container) sync(container);
   }, true);
 
-  return { labels, normalize, summary, render, read };
+  return { labels, normalize, summary, render, read, sync };
 })();

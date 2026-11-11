@@ -17,13 +17,13 @@ const pickupRequired = { error: "接機接待調查已開放，請回答是否�
 
 // The page shows the survey fields when the switch opened after it loaded; the reply carries the
 // description too, which the admin may have written meanwhile. It is public text, like GET returns.
-async function surveyRequiredResponse(database, kind) {
-  const body = kind === "pickup" ? pickupRequired : hostingRequired;
+async function surveyRequiredResponse(database, kind, code = null) {
+  const body = code ? { error: "此身分目前未開放填寫這項接待調查", code } : kind === "pickup" ? pickupRequired : hostingRequired;
   const column = `${kind}_description`;
   try {
-    const { data, error } = await database.from("site_settings").select(column).single();
+    const { data, error } = await database.from("site_settings").select("is_hosting_open,is_pickup_open,hosting_description,pickup_description,hosting_identity_codes,pickup_identity_codes").single();
     // Without a successful read the field is left out, so the page keeps the description it has.
-    if (!error && data) return response({ ...body, [column]: data[column] }, 409);
+    if (!error && data) return response({ ...body, [column]: data[column], survey_settings: data }, 409);
   } catch (error) {
     console.error(`Failed to read ${column}`, error);
   }
@@ -40,6 +40,8 @@ export function formErrorResponse(error, database) {
   if (message.includes("AUDIENCE_RESTRICTED")) {
     return response({ error: "有活動不符合報名對象，請確認開家、接機與活動選擇；畫面不符時請重新整理頁面" }, 400);
   }
+  if (message.includes("HOSTING_NOT_ALLOWED")) return surveyRequiredResponse(database, "hosting", "HOSTING_NOT_ALLOWED");
+  if (message.includes("PICKUP_NOT_ALLOWED")) return surveyRequiredResponse(database, "pickup", "PICKUP_NOT_ALLOWED");
   if (message.includes("HOSTING_CLOSED")) return response(hostingClosed, 409);
   if (message.includes("HOSTING_REQUIRED")) return surveyRequiredResponse(database, "hosting");
   if (message.includes("PICKUP_CLOSED")) return response(pickupClosed, 409);
@@ -158,7 +160,7 @@ export async function handler(request) {
 
   if (request.method === "GET") {
     const [settings, districts, activities, program, identities] = await Promise.all([
-      database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description").single(),
+      database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description,hosting_identity_codes,pickup_identity_codes").single(),
       database.from("districts").select("id,name").order("sort_order"),
       database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),audience,audience_note").eq("is_published", true).order("sort_order"),
       database.from("program_items").select("event_date,start_time,end_time,title,note").eq("is_visible", true).order("sort_order"),
@@ -266,7 +268,7 @@ export async function handler(request) {
       parent_name: child.data?.parent_name ?? null });
   }
 
-  const { data, error } = await database.rpc("update_registration_with_pickup", {
+  const { data, error } = await database.rpc("update_registration_survey_result", {
     p_full_name: body.full_name,
     p_district_id: districtId,
     p_choices: body.choices,
@@ -285,8 +287,8 @@ export async function handler(request) {
     console.error("Failed to update registration", error);
     return response({ error: "服務暫時無法使用" }, 503);
   }
-  if (data !== true) return response({ error: notFoundMessage }, 404);
-  return response({ success: true });
+  if (data?.success !== true) return response({ error: notFoundMessage }, 404);
+  return response(data);
 }
 
 if (typeof Deno !== "undefined") {

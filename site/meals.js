@@ -1,13 +1,15 @@
 // 用餐身分與自訂價格、報名對象，以及活動的時間、費用與地圖連結文字, shared by the public page and the
 // back office. The database applies the same rules (registration_meal_identity,
-// registration_audience_valid); this only keeps the form in step.
+// survey_audience_valid); this only keeps the form in step.
 const Meals = (() => {
   const identityLabels = { general: "一般", student: "學生", child: "兒童（國小）", preschool: "兒童（學齡前）" };
   // Until configure() gets the list from the Edge Function (an older one sends none).
   let identities = Object.entries(identityLabels).map(([code, name]) => ({ code, name, is_active: true, public_selectable: true }));
   let staff = false;
+  let surveySettings = {};
   // identityLabels is changed in place, since callers hold the object.
-  function configure(items, isStaff = false) {
+  function configure(items, isStaff = false, settings = {}) {
+    surveySettings = settings;
     if (!items) return;
     identities = items;
     staff = isStaff;
@@ -22,9 +24,9 @@ const Meals = (() => {
   const eligible = (activity, context = {}) => {
     const audience = activity.audience ?? "all";
     if (audience === "all") return true;
-    // Whoever answers neither survey is outside both audiences (兒童 2026-11-09, any non-一般 2026-11-10).
+    // Public survey targets determine exemptions independently, including in the back office.
     if (audience === "hosting") return Boolean(context.skipsHosting) || hostingStatuses.includes(context.hostingStatus);
-    if (audience === "pickup") return Boolean(context.skipsHosting) || context.pickupStatus === "yes";
+    if (audience === "pickup") return Boolean(context.skipsPickup ?? context.skipsHosting) || context.pickupStatus === "yes";
     if (!audience.startsWith("activity:")) return false;
     const requiredId = Number(audience.slice(9));
     const prerequisite = context.activities?.find((item) => item.id === requiredId);
@@ -144,8 +146,8 @@ const Meals = (() => {
   // The form's 身分別; null while 請選擇.
   const readIdentity = (form) => form.elements.meal_identity.value || null;
   const childType = (identity) => identity === "preschool" ? "preschool" : identity === "child" ? "elementary" : "";
-  // Only 一般 answers 開家接待 and 接機接待; the server stores 否 for anyone else (decided 2026-11-10).
-  const answersHosting = (identity) => identity === "general";
+  // The two target lists are independent; older reference responses retain the general-only default.
+  const answersHosting = (identity, kind = "hosting") => (surveySettings[`${kind}_identity_codes`] ?? ["general"]).includes(identity);
   // 身分別 options: new picks follow selectable(); the stored identity stays even when stopped or staff-only.
   function renderIdentity(select, stored = null) {
     const current = stored ?? select.value;

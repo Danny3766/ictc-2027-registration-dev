@@ -25,7 +25,7 @@ begin
   v_code := public.staff_save_reference(v_admin, 'identity',
     '{"name": "身分驗證志工", "is_active": true, "public_selectable": false}')->>'code';
   if (select sort_order from public.registration_identities where code = v_code)
-    <= (select max(sort_order) from public.registration_identities where code <> v_code) then
+    <= (select max(sort_order) from public.registration_identities where code is distinct from v_code) then
     raise exception 'NEW_IDENTITY_NOT_LAST';
   end if;
   if not exists (select 1 from public.audit_events where action = 'reference.saved' and target_type = 'identity'
@@ -38,7 +38,7 @@ begin
   exception when invalid_parameter_value then null;
   end;
   perform set_config('registration.staff_identity', 'on', true);
-  if public.registration_meal_identity('[]', v_code) <> v_code then raise exception 'STAFF_IDENTITY_FAILED'; end if;
+  if public.registration_meal_identity('[]', v_code) is distinct from v_code then raise exception 'STAFF_IDENTITY_FAILED'; end if;
   perform set_config('registration.staff_identity', '', true);
 
   -- child: automatic for a child, refused for an adult, and a former child's stored child becomes general.
@@ -47,9 +47,9 @@ begin
     raise exception 'ADULT_CHOSE_CHILD';
   exception when invalid_parameter_value then null;
   end;
-  if public.registration_meal_identity('[]', null, 'child') <> 'general' then raise exception 'FORMER_CHILD_NOT_GENERAL'; end if;
+  if public.registration_meal_identity('[]', null, 'child') is distinct from 'general' then raise exception 'FORMER_CHILD_NOT_GENERAL'; end if;
   perform set_config('registration.saving_child', 'on', true);
-  if public.registration_meal_identity('[]', 'general') <> 'child' then raise exception 'CHILD_NOT_AUTOMATIC'; end if;
+  if public.registration_meal_identity('[]', 'general') is distinct from 'child' then raise exception 'CHILD_NOT_AUTOMATIC'; end if;
   perform set_config('registration.saving_child', '', true);
 
   -- Any attended published meal needs an identity, with or without other prices.
@@ -57,7 +57,7 @@ begin
     'title', '身分驗證晚餐', 'category', 'meal', 'is_published', true, 'sort_order', 9301, 'fee_amount', 120,
     'identity_prices', jsonb_build_array(jsonb_build_object('identity_code', 'child', 'fee_amount', 80),
       jsonb_build_object('identity_code', v_code, 'fee_amount', 0))))->>'id')::bigint;
-  if (select count(*) from public.activity_identity_prices where activity_id = v_meal) <> 2 then
+  if (select count(*) from public.activity_identity_prices where activity_id = v_meal) is distinct from 2 then
     raise exception 'PRICES_NOT_SAVED';
   end if;
   if not exists (select 1 from public.audit_events where action = 'reference.saved'
@@ -68,19 +68,24 @@ begin
     perform public.registration_meal_identity(jsonb_build_array(jsonb_build_object('activity_id', v_meal, 'attending', true)), null);
     raise exception 'MEAL_WITHOUT_IDENTITY_ACCEPTED';
   exception when raise_exception then
-    if sqlerrm <> 'MEAL_IDENTITY_REQUIRED' then raise; end if;
+    if sqlerrm is distinct from 'MEAL_IDENTITY_REQUIRED' then raise; end if;
   end;
-  if public.registration_meal_identity('[]', null) <> 'general' then raise exception 'NO_MEAL_NOT_GENERAL'; end if;
+  begin
+    perform public.registration_meal_identity('[]', null);
+    raise exception 'IDENTITY_WITHOUT_MEAL_NOT_REQUIRED';
+  exception when raise_exception then
+    if sqlerrm is distinct from 'MEAL_IDENTITY_REQUIRED' then raise; end if;
+  end;
 
   -- Staff save the staff-only identity; once stopped it stays on that registration but is no new choice.
   select jsonb_agg(jsonb_build_object('activity_id', id, 'attending', id = v_meal)) into v_choices
   from public.activities where is_published;
   select registration_id into v_id from public.staff_create_registration_with_pickup(
     v_admin, gen_random_uuid(), '身分驗證登記', v_district, v_choices, null, v_code);
-  if (select meal_identity from public.registrations where id = v_id) <> v_code then raise exception 'STAFF_CREATE_FAILED'; end if;
+  if (select meal_identity from public.registrations where id = v_id) is distinct from v_code then raise exception 'STAFF_CREATE_FAILED'; end if;
   perform public.staff_save_reference(v_admin, 'identity',
     jsonb_build_object('code', v_code, 'name', '身分驗證志工', 'is_active', false, 'public_selectable', false));
-  if public.registration_meal_identity('[]', v_code, v_code) <> v_code then raise exception 'STOPPED_IDENTITY_NOT_KEPT'; end if;
+  if public.registration_meal_identity('[]', v_code, v_code) is distinct from v_code then raise exception 'STOPPED_IDENTITY_NOT_KEPT'; end if;
   begin
     perform public.registration_meal_identity('[]', v_code, 'general');
     raise exception 'STOPPED_IDENTITY_ACCEPTED';
@@ -92,20 +97,20 @@ begin
     perform public.staff_save_reference(v_admin, 'delete_identity', jsonb_build_object('code', v_code));
     raise exception 'USED_IDENTITY_DELETED';
   exception when invalid_parameter_value then
-    if sqlerrm <> 'IDENTITY_IN_USE' then raise; end if;
+    if sqlerrm is distinct from 'IDENTITY_IN_USE' then raise; end if;
   end;
   begin
     perform public.staff_save_reference(v_admin, 'delete_identity', '{"code": "child"}');
     raise exception 'RESERVED_IDENTITY_DELETED';
   exception when invalid_parameter_value then
-    if sqlerrm <> 'IDENTITY_IN_USE' then raise; end if;
+    if sqlerrm is distinct from 'IDENTITY_IN_USE' then raise; end if;
   end;
   begin
     perform public.staff_save_reference(v_admin, 'identity',
       '{"code": "identity_missing", "name": "不存在", "is_active": true, "public_selectable": true}');
     raise exception 'MISSING_IDENTITY_CREATED';
   exception when invalid_parameter_value then
-    if sqlerrm <> 'REFERENCE_NOT_FOUND' then raise; end if;
+    if sqlerrm is distinct from 'REFERENCE_NOT_FOUND' then raise; end if;
   end;
   v_unused := public.staff_save_reference(v_admin, 'identity',
     '{"name": "身分驗證未使用", "is_active": true, "public_selectable": true}')->>'code';

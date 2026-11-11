@@ -36,7 +36,7 @@ async function mockStaff(page, role, onRequest = () => {}, registrationName = "�
     } });
     if (action === "registration_statistics" && !replies[action]) {
       const records = replies.list_registrations?.({ before_serial: Number.MAX_SAFE_INTEGER })?.json?.registrations ?? lastRegistrations;
-      return route.fulfill({ json: { statistics: statisticsFixture(records, lastReference.activities) } });
+      return route.fulfill({ json: { statistics: statisticsFixture(records, lastReference.activities, lastReference.settings) } });
     }
     const reply = replies[action]?.(payload);
     if ((action === "list_reference" || action === "me" && reply?.json?.settings) && reply?.json && !reply.json.error) {
@@ -183,6 +183,29 @@ test("statistics render a million registrations using aggregates without downloa
   expect(requests.filter((r) => r.action === "registration_statistics")).toHaveLength(1);
 });
 
+test("invalid survey history stays out of statistics and CSV capacities", async ({ page }, testInfo) => {
+  const records = [
+    { id: "223e4567-e89b-42d3-a456-426614174000", serial_no: 1, full_name: "需重答", district_id: 1, meal_identity: "general", record_status: "active", import_status: "pending",
+      registration_choices: [{ activity_id: 1, attending: false }], registration_hosting: { status: "hosting", guest_type: "any", guest_count: 5, answer_valid: false }, registration_pickup: { status: "yes", count: 6, answer_valid: false } },
+    { id: "323e4567-e89b-42d3-a456-426614174000", serial_no: 2, full_name: "不適用者", district_id: 1, meal_identity: "student", record_status: "active", import_status: "pending",
+      registration_choices: [{ activity_id: 1, attending: false }], registration_hosting: null, registration_pickup: null },
+  ];
+  await mockStaff(page, "staff", () => {}, "需重答", { list_registrations: () => ({ json: { registrations: records, count: 2 } }) });
+  await login(page, "統計與匯出");
+  await page.getByRole("button", { name: "更新統計" }).click();
+  await expect(page.locator("#hosting-status-stats-rows").getByRole("row", { name: "未回覆 1", exact: true })).toBeVisible();
+  await expect(page.locator("#hosting-status-stats-rows").getByRole("row", { name: "不適用 1", exact: true })).toBeVisible();
+  await expect(page.locator("#hosting-pickup-stats-rows").getByRole("row", { name: "是 0 0", exact: true })).toBeVisible();
+  if (testInfo.project.name !== "desktop-chromium") return;
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
+  const csv = await readFile(await (await download).path(), "utf8");
+  const stale = csv.split("\r\n").find((line) => line.includes("需重答"));
+  expect(stale).toContain('"未回覆"');
+  expect(stale).not.toContain('"5"'); expect(stale).not.toContain('"6"');
+  expect(csv.split("\r\n").find((line) => line.includes("不適用者"))).toContain('"不適用"');
+});
+
 test("CSV neutralizes spreadsheet formulas", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-chromium");
   await mockStaff(page, "staff", () => {}, "=1+1");
@@ -287,6 +310,30 @@ async function login(page, view) {
   await page.getByRole("button", { name: "登入" }).click();
   if (view) await go(page, view);
 }
+
+test("activity import setting loads and sends both checked and unchecked values", async ({ page }) => {
+  const saved = [];
+  await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved.push(payload.data); }, "測試登記", {
+    list_reference: () => {
+      const result = threeActivities.list_reference();
+      result.json.activities.forEach((activity) => { activity.affects_conference_import = true; });
+      return result;
+    },
+  });
+  await login(page, "活動");
+  await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).first().click();
+  const setting = page.getByLabel("影響大會匯入狀態", { exact: true });
+  await expect(setting).toBeChecked();
+  await setting.uncheck();
+  await page.locator("#activity-form").getByRole("button", { name: /^儲存活動/ }).click();
+  await expect.poll(() => saved.length).toBe(1);
+  expect(saved[0].affects_conference_import).toBe(false);
+  await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).first().click();
+  await setting.check();
+  await page.locator("#activity-form").getByRole("button", { name: /^儲存活動/ }).click();
+  await expect.poll(() => saved.length).toBe(2);
+  expect(saved[1].affects_conference_import).toBe(true);
+});
 
 test("activity sort is preserved when editing and defaults to the end when creating", async ({ page }) => {
   const saved = [];
@@ -1266,6 +1313,7 @@ test("admins save the hosting switch and description from their own card", async
   await expect(page.locator("#message")).toHaveText("設定已儲存。");
   expect(saved).toEqual({ action: "save_reference", kind: "hosting", data: {
     is_hosting_open: true, hosting_description: "接待期間 2/19～2/22", is_pickup_open: false, pickup_description: "",
+    hosting_identity_codes: ["general"], pickup_identity_codes: ["general"],
   } });
 });
 
@@ -1630,15 +1678,15 @@ test("協助登記 follows the audience and asks the identity for a student-pric
   await identity.selectOption("");
   await form.getByRole("button", { name: "建立協助登記" }).click();
   expect(created).toBeUndefined();
-  // Only 一般 answers the surveys; a student is outside the hosting audience and keeps the lunch.
+  // Staff may retain the answer for a student; its public audience exemption remains.
   await identity.selectOption("student");
-  await expect(form.locator(".hosting-panel")).toBeHidden();
+  await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(lunch.locator('input[value="true"]')).toBeChecked();
   await form.getByRole("button", { name: "建立協助登記" }).click();
   await expect(page.locator("#new-registration-code")).toContainText("已建立流水號 5");
   await expect(page.locator("#message")).toHaveText("協助登記已建立。");
   expect(created.meal_identity).toBe("student");
-  expect(created.hosting).toBeNull();
+  expect(created.hosting.status).toBe("family_registered");
   expect(created.choices).toEqual([{ activity_id: 1, attending: true }, { activity_id: 2, attending: false }, { activity_id: 3, attending: false }]);
 });
 
@@ -1855,18 +1903,18 @@ test("the 兒童 condition lists children only, with 區 and paging, and 清除�
   await expect(child).toHaveValue("");
 });
 
-test("協助登記 for a child hides both surveys and requires the parent's name at the bottom", async ({ page }) => {
+test("協助登記 for a child permits both surveys and requires the parent's name at the bottom", async ({ page }) => {
   const created = [];
   await mockStaff(page, "staff", (payload) => { if (payload.action === "create_registration") created.push(payload); },
     "測試登記", { ...familyReplies, create_registration: () => ({ status: 201, json: { serial_no: 6 } }) });
   await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
-  // The surveys wait for 一般.
-  await expect(form.locator(".hosting-panel")).toBeHidden();
+  // Staff may fill either survey for every identity.
+  await expect(form.locator(".hosting-panel")).toBeVisible();
   await form.getByRole("combobox", { name: "身分別", exact: true }).selectOption("general");
   await expect(form.locator(".hosting-panel")).toBeVisible();
   await form.getByRole("combobox", { name: "身分別", exact: true }).selectOption("child");
-  await expect(form.locator(".hosting-panel")).toBeHidden();
+  await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(form.locator(".child-hint")).toHaveText("兒童報名請在表單最下方填寫家長姓名。");
   expect(await form.evaluate((element) => [...element.children].filter((item) => item.checkVisibility())
     .slice(-2).map((item) => item.className || item.tagName))).toEqual(["parent-name", "BUTTON"]);
@@ -1885,7 +1933,7 @@ test("協助登記 for a child hides both surveys and requires the parent's name
   expect(created[0]).toMatchObject({ full_name: "王小美", meal_identity: "child", child_type: "elementary", parent_name: "王爸爸", hosting: null, pickup: null });
   // A new registration starts with no identity selected.
   await expect(form.getByRole("combobox", { name: "身分別", exact: true })).toHaveValue("");
-  await expect(form.locator(".hosting-panel")).toBeHidden();
+  await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(form.locator(".parent-name")).toBeHidden();
 });
 
@@ -1946,7 +1994,7 @@ test("a child's record shows the parent's name read-only and can be changed back
   await expect(form.getByRole("combobox", { name: "身分別", exact: true })).toBeDisabled();
   await expect(form.locator('input[name="parent_name"]')).toHaveValue("王爸爸");
   await expect(form.locator('input[name="parent_name"]')).toBeDisabled();
-  await expect(form.locator(".hosting-panel")).toBeHidden();
+  await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(form.locator(".child-hint")).toBeHidden();
 
   await page.getByRole("button", { name: "修改登記資料" }).click();
@@ -2136,7 +2184,7 @@ test("configured badges use custom identities and hide child badges without chan
   await expect(children).toHaveAttribute("data-csv", "3（國小 3）");
 });
 
-test("協助登記 shows the child reminders as a blue block and the surveys for 一般 only", async ({ page }) => {
+test("協助登記 shows the child reminders as a blue block and the surveys for every identity", async ({ page }) => {
   await mockStaff(page, "staff", () => {}, "測試登記", familyReplies);
   await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
@@ -2149,7 +2197,7 @@ test("協助登記 shows the child reminders as a blue block and the surveys for
   await expect(reminder).toHaveCSS("color", "rgb(29, 79, 134)");
   await identity.selectOption("student");
   await expect(reminder).toBeHidden();
-  await expect(form.locator(".hosting-panel")).toBeHidden();
+  await expect(form.locator(".hosting-panel")).toBeVisible();
   await identity.selectOption("general");
   await expect(form.locator(".hosting-panel")).toBeVisible();
 });

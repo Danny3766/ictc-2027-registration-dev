@@ -2,6 +2,8 @@
 -- 在測試專案 SQL Editor 執行；需要一位已改過初始密碼的有效管理員。整個驗證交易最後回滾，
 -- 暫時開放的設定與建立的登記都不會留下。姓名都是虛構的。
 begin;
+-- Some checks are asserts: a database with asserts switched off would skip them and pass silently.
+set local plpgsql.check_asserts = on;
 
 do $$
 declare
@@ -28,75 +30,79 @@ begin
 
   -- Pickup is saved without hosting, and audited.
   select registration_id into v_id from public.create_registration_with_pickup(
-    gen_random_uuid(), v_name, v_district, v_choices, null, null, '{"status":"yes","count":2}');
+    gen_random_uuid(), v_name, v_district, v_choices, null, 'general', '{"status":"yes","count":2}');
   if public.registration_hosting_get(v_id) is not null
-    or public.registration_pickup_get(v_id) <> '{"status":"yes","count":2}'::jsonb
-    or public.get_registration_pickup(v_name, v_district) <> '{"status":"yes","count":2}'::jsonb
+    or public.registration_pickup_get(v_id) is distinct from '{"status":"yes","count":2}'::jsonb
+    or public.get_registration_pickup(v_name, v_district) is distinct from '{"status":"yes","count":2}'::jsonb
     or not exists (select 1 from public.audit_events where target_id = v_id and action = 'registration.pickup_updated') then
     raise exception 'pickup must be saved without hosting';
   end if;
 
   update public.registrations set import_status = 'imported' where id = v_id;
+  perform public.update_registration_with_pickup(v_name, v_district, v_choices, null, 'general', '{"status":"yes","count":3}');
+  assert public.registration_pickup_get(v_id) = '{"status":"yes","count":3}'::jsonb, 'PICKUP_COUNT_NOT_SAVED';
+  assert (select import_status='reimport_needed' from public.registrations where id=v_id), 'PICKUP_COUNT_NOT_DIRTY';
+  update public.registrations set import_status='imported' where id=v_id;
   -- Call and check in separate statements: one expression reads a single snapshot.
-  if not public.update_registration_with_pickup(v_name, v_district, v_choices, null, null, '{"status":"no","count":0}') then
+  if not public.update_registration_with_pickup(v_name, v_district, v_choices, null, 'general', '{"status":"no","count":0}') then
     raise exception 'pickup update returned false';
   end if;
-  if public.registration_pickup_get(v_id) <> '{"status":"no","count":0}'::jsonb
-    or (select import_status from public.registrations where id = v_id) <> 'reimport_needed' then
+  if public.registration_pickup_get(v_id) is distinct from '{"status":"no","count":0}'::jsonb
+    or (select import_status from public.registrations where id = v_id) is distinct from 'reimport_needed' then
     raise exception 'pickup update failed';
   end if;
   -- No answer sent keeps the stored one.
-  perform public.update_registration_with_pickup(v_name, v_district, v_choices, null, null, null);
-  if public.registration_pickup_get(v_id) <> '{"status":"no","count":0}'::jsonb then
+  perform public.update_registration_with_pickup(v_name, v_district, v_choices, null, 'general', null);
+  if public.registration_pickup_get(v_id) is distinct from '{"status":"no","count":0}'::jsonb then
     raise exception 'missing pickup must keep the stored answer';
   end if;
 
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), v_name || '-missing', v_district,
-      v_choices, null, null, null);
+      v_choices, null, 'general', null);
     raise exception 'missing pickup was accepted';
   exception when sqlstate 'P0001' then
-    if sqlerrm <> 'PICKUP_REQUIRED' then raise; end if;
+    if sqlerrm is distinct from 'PICKUP_REQUIRED' then raise; end if;
   end;
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), v_name || '-bad', v_district,
-      v_choices, null, null, '{"status":"yes","count":0}');
+      v_choices, null, 'general', '{"status":"yes","count":0}');
     raise exception 'invalid pickup was accepted';
   exception when sqlstate '22023' then
-    if sqlerrm <> 'INVALID_PICKUP' then raise; end if;
+    if sqlerrm is distinct from 'INVALID_PICKUP' then raise; end if;
   end;
 
   -- The registration's own closed state wins over the pickup answer.
   update public.site_settings set is_registration_open = false where id;
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), v_name || '-late', v_district,
-      v_choices, null, null, null);
+      v_choices, null, 'general', null);
     raise exception 'closed registration was accepted';
   exception when sqlstate 'P0001' then
-    if sqlerrm <> 'REGISTRATION_CLOSED' then raise; end if;
+    if sqlerrm is distinct from 'REGISTRATION_CLOSED' then raise; end if;
   end;
   update public.site_settings set is_registration_open = true where id;
 
   update public.site_settings set is_hosting_open = true, is_pickup_open = false where id;
   begin
     perform public.create_registration_with_pickup(gen_random_uuid(), v_name || '-closed', v_district,
-      v_choices, '{"status":"not_hosting"}', null, '{"status":"yes","count":1}');
+      v_choices, '{"status":"not_hosting"}', 'general', '{"status":"yes","count":1}');
     raise exception 'closed pickup was accepted';
   exception when sqlstate 'P0001' then
-    if sqlerrm <> 'PICKUP_CLOSED' then raise; end if;
+    if sqlerrm is distinct from 'PICKUP_CLOSED' then raise; end if;
   end;
 
   -- Staff may answer pickup while it is closed; no answer keeps the stored one.
   select registration_id into v_staff_id from public.staff_create_registration_with_pickup(v_admin,
-    gen_random_uuid(), v_name || '-staff', v_district, v_choices, '{"status":"not_hosting"}', null,
+    gen_random_uuid(), v_name || '-staff', v_district, v_choices, '{"status":"not_hosting"}', 'general',
     '{"status":"yes","count":3}');
   if not public.staff_update_registration_with_pickup(v_admin, v_staff_id, v_name || '-staff', v_district,
-      v_choices, null, null, null)
-    or public.registration_pickup_get(v_staff_id) <> '{"status":"yes","count":3}'::jsonb then
+      v_choices, null, 'general', null)
+    or public.registration_pickup_get(v_staff_id) is distinct from '{"status":"yes","count":3}'::jsonb then
     raise exception 'staff pickup failed';
   end if;
   if public.staff_update_registration_with_pickup(v_admin, gen_random_uuid(), v_name, v_district,
-      v_choices, null, null, '{"status":"no"}') then
+      v_choices, null, 'general', '{"status":"no"}') then
     raise exception 'unknown registration was updated';
   end if;
 end;
