@@ -15,7 +15,8 @@ const editHosting = document.querySelector("#edit-hosting");
 const editPickup = document.querySelector("#edit-pickup");
 const editChildInput = editForm.elements.meal_identity;
 const editParentInput = editForm.elements.parent_name;
-const hostingClosedMessage = "開家接待調查已關閉，如需調整請聯絡服事者";
+// Server codes for a survey switch that changed after this page loaded.
+const surveyChangeCodes = ["HOSTING_CLOSED", "HOSTING_REQUIRED", "PICKUP_CLOSED", "PICKUP_REQUIRED"];
 const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
 const startedAt = Date.now();
 let pageData;
@@ -25,7 +26,7 @@ let queriedChoicesBaseline = null;
 let queriedHostingBaseline = null;
 let queriedPickupBaseline = null;
 let queriedIdentityBaseline = null;
-// { is_child, child_type, parent_name } as saved; child_type is "" and parent_name null for anyone not a child.
+// { child_type, parent_name } as saved; child_type is "" and parent_name null for anyone not a child.
 let queriedChildBaseline = null;
 // The edit form as it first appears. Opening it can already turn a restricted activity signed up
 // before the restriction into 不參加 (and so hide the identity question); that alone is not an edit
@@ -204,9 +205,9 @@ const registrationChild = () => Boolean(Meals.childType(registrationForm.element
 function currentEditChild() {
   if (!editMode) return queriedChildBaseline;
   const type = Meals.childType(editChildInput.value);
-  return { is_child: Boolean(type), child_type: type, parent_name: type ? editParentInput.value.trim() : null };
+  return { child_type: type, parent_name: type ? editParentInput.value.trim() : null };
 }
-const editingChild = () => Boolean(currentEditChild()?.is_child);
+const editingChild = () => Boolean(currentEditChild()?.child_type);
 const registrationSkipsHosting = () => !Meals.answersHosting(registrationForm.elements.meal_identity.value);
 const editingSkipsHosting = () => !Meals.answersHosting(currentEditIdentity());
 
@@ -244,13 +245,13 @@ const checkedHostingStatus = (container) => container.querySelector('[name="host
 // Restricted activities follow the current hosting, pickup and activity answers.
 function syncMeals() {
   Meals.sync(registrationForm, pageData.activities, {
-    skipsHosting: registrationSkipsHosting(), childType: Meals.childType(registrationForm.elements.meal_identity.value),
+    skipsHosting: registrationSkipsHosting(),
     hostingStatus: hostingOpen() ? checkedHostingStatus(hostingFields) : null,
     pickupStatus: pickupOpen() ? Pickup.read(pickupFields)?.status : null,
   });
   if (editMode) {
     Meals.sync(editActivities, pageData.activities, {
-      skipsHosting: editingSkipsHosting(), childType: currentEditChild()?.child_type,
+      skipsHosting: editingSkipsHosting(),
       hostingStatus: hostingOpen() ? checkedHostingStatus(editHosting) : queriedHostingBaseline?.status ?? null,
       pickupStatus: currentEditPickup()?.status ?? null,
     });
@@ -319,6 +320,7 @@ function showRegistrationHosting() {
 // HOSTING_REQUIRED carries the current description, which the admin may have written meanwhile.
 function applyHostingChange(error) {
   const kind = error.code.startsWith("PICKUP") ? "pickup" : "hosting";
+  const title = kind === "pickup" ? "接機接待" : "開家接待";
   pageData.settings[`is_${kind}_open`] = error.code.endsWith("REQUIRED");
   if (error.body?.[`${kind}_description`] !== undefined) pageData.settings[`${kind}_description`] = error.body[`${kind}_description`];
   showRegistrationHosting();
@@ -336,14 +338,13 @@ function applyHostingChange(error) {
   if (editMode && error.code.endsWith("CLOSED") && !hasUnsavedChanges()) {
     showConfirmation();
     // Nothing was lost and the page is back to a normal confirmation, so this is not an error.
-    return showMessage(`${kind === "pickup" ? "接機接待" : "開家接待"}調查已關閉，接待內容維持原樣。`);
+    return showMessage(`${title}調查已關閉，接待內容維持原樣。`);
   }
   const button = editMode ? "「儲存修改」" : "「送出登記」";
   if (error.code.endsWith("REQUIRED")) return showMessage(kind === "pickup"
     ? `接機接待調查已開放，請回答是否可以接機後再按${button}。`
     : `開家接待調查已開放，請回答開家接待後再按${button}。`, true);
   // A new registration had nothing stored, so its answer is dropped, not kept.
-  const title = kind === "pickup" ? "接機接待" : "開家接待";
   return showMessage(editMode ? `${title}調查已關閉，接待內容維持原樣，請再按一次「儲存修改」。`
     : `${title}調查已關閉，接待回答不會送出；請再按一次「送出登記」。`, true);
 }
@@ -362,7 +363,7 @@ function showHostingSummary() {
   if (!editMode || !hostingOpen()) {
     delete editHosting.dataset.hosting;
     editHosting.innerHTML = hostingOpen() || queriedHostingBaseline
-      ? `<p class="activity-status">開家接待：${escapeHtml(Hosting.summary(queriedHostingBaseline))}</p>${hostingOpen() ? "" : `<p class="hint">${hostingClosedMessage}</p>`}` : "";
+      ? `<p class="activity-status">開家接待：${escapeHtml(Hosting.summary(queriedHostingBaseline))}</p>${hostingOpen() ? "" : '<p class="hint">開家接待調查已關閉，如需調整請聯絡服事者</p>'}` : "";
   }
   if (!editMode || !pickupOpen()) {
     delete editPickup.dataset.pickup;
@@ -491,7 +492,7 @@ registrationForm.addEventListener("submit", async (event) => {
       hosting,
       pickup,
       meal_identity: mealIdentity ?? undefined,
-      is_child: child, child_type: Meals.childType(registrationForm.elements.meal_identity.value),
+      child_type: Meals.childType(registrationForm.elements.meal_identity.value),
       parent_name: parentName ?? undefined,
       turnstile_token: null,
     });
@@ -510,7 +511,7 @@ registrationForm.addEventListener("submit", async (event) => {
     }));
     location.assign("./success.html");
   } catch (error) {
-    if (["HOSTING_CLOSED", "HOSTING_REQUIRED", "PICKUP_CLOSED", "PICKUP_REQUIRED"].includes(error.code)) return applyHostingChange(error);
+    if (surveyChangeCodes.includes(error.code)) return applyHostingChange(error);
     showMessage(error.message, true);
   } finally {
     setBusy(registrationForm, false);
@@ -536,8 +537,8 @@ queryForm.addEventListener("submit", async (event) => {
     const registration = await api({ action: "query", ...identity });
     document.querySelector("#edit-full-name").value = registration.full_name;
     document.querySelector("#edit-district").value = districtName(registration.district_id);
-    queriedChildBaseline = { is_child: registration.is_child === true, child_type: registration.child_type ?? "",
-      parent_name: registration.is_child === true ? registration.parent_name ?? null : null };
+    queriedChildBaseline = { child_type: registration.child_type ?? "",
+      parent_name: registration.child_type ? registration.parent_name ?? null : null };
     activeIdentity = identity;
     queriedChoicesBaseline = sortedChoices(registration.choices);
     queriedHostingBaseline = Hosting.normalize(registration.hosting);
@@ -569,7 +570,7 @@ editForm.addEventListener("submit", async (event) => {
   const choices = currentEditChoices();
   if (choices.some((choice) => choice.attending === null)) return showMessage("請回答每一項活動", true);
   const child = currentEditChild();
-  if (child.is_child && !child.parent_name) return showMessage("請填寫家長姓名", true);
+  if (child.child_type && !child.parent_name) return showMessage("請填寫家長姓名", true);
   if (!editForm.reportValidity() || !hasUnsavedChanges()) return;
   const hosting = currentEditHosting();
   const pickup = currentEditPickup();
@@ -589,7 +590,7 @@ editForm.addEventListener("submit", async (event) => {
     showConfirmation();
     showMessage("修改已儲存，以下為目前登記內容。");
   } catch (error) {
-    if (["HOSTING_CLOSED", "HOSTING_REQUIRED", "PICKUP_CLOSED", "PICKUP_REQUIRED"].includes(error.code)) return applyHostingChange(error);
+    if (surveyChangeCodes.includes(error.code)) return applyHostingChange(error);
     if (error.status === 409 || error.message === "查詢功能暫停中，請稍後再試") {
       queriedCanChange = false;
       showConfirmation();

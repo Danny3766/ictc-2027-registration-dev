@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { statisticsFixture } from "./statistics-fixture.mjs";
 
 // The Edge Function sends the identities and each activity's identity prices; fixtures written
 // before them get the defaults (an activity's student price becomes its student identity price).
@@ -18,6 +19,7 @@ function migrateReference(data) {
 }
 
 async function mockStaff(page, role, onRequest = () => {}, registrationName = "測試登記", replies = {}) {
+  let lastReference, lastRegistrations;
   await page.route("**/auth/v1/token?grant_type=password", async (route) => {
     const body = route.request().postDataJSON();
     expect(body.email).toBe("tester@accounts.invalid");
@@ -29,8 +31,19 @@ async function mockStaff(page, role, onRequest = () => {}, registrationName = "�
     const payload = route.request().postDataJSON();
     const { action } = payload;
     onRequest(payload);
+    if (action === "get_registration" && !replies[action]) return route.fulfill({ json: {
+      registration: lastRegistrations.find((r) => r.id === payload.registration_id),
+    } });
+    if (action === "registration_statistics" && !replies[action]) {
+      const records = replies.list_registrations?.({ before_serial: Number.MAX_SAFE_INTEGER })?.json?.registrations ?? lastRegistrations;
+      return route.fulfill({ json: { statistics: statisticsFixture(records, lastReference.activities) } });
+    }
     const reply = replies[action]?.(payload);
-    if (action === "list_reference" && reply?.json) migrateReference(reply.json);
+    if ((action === "list_reference" || action === "me" && reply?.json?.settings) && reply?.json && !reply.json.error) {
+      migrateReference(reply.json);
+      lastReference = reply.json;
+    }
+    if (action === "list_registrations" && reply?.json) lastRegistrations = reply.json.registrations;
     if (reply) return route.fulfill(reply);
     const result = {
       me: { profile: { auth_user_id: "123e4567-e89b-42d3-a456-426614174000", display_name: "測試服事者", role, must_change_password: false } },
@@ -40,7 +53,11 @@ async function mockStaff(page, role, onRequest = () => {}, registrationName = "�
       save_registration: { success: true },
       save_reference: { saved: {} },
     }[action];
-    if (action === "list_reference" && result) migrateReference(result);
+    if (action === "list_reference" && result) {
+      migrateReference(result);
+      lastReference = result;
+    }
+    if (action === "list_registrations" && result) lastRegistrations = result.registrations;
     await route.fulfill({ status: result ? 200 : 400, json: result ?? { error: "INVALID_ACTION" } });
   });
 }
@@ -63,6 +80,107 @@ test("staff registration edit sends all published activity choices", async ({ pa
   await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
   expect(saved.registration_id).toBe("223e4567-e89b-42d3-a456-426614174000");
   expect(saved.choices).toEqual([{ activity_id: 1, attending: true }]);
+});
+
+test("registration save acknowledges before refresh and prevents duplicate submissions", async ({ page }) => {
+  await mockStaff(page, "staff");
+  await page.goto("/admin/");
+  await page.locator('#login-form input[name="username"]').fill("tester");
+  await page.locator('#login-form input[name="password"]').fill("test-password");
+  await page.getByRole("button", { name: "登入" }).click();
+  await page.getByRole("button", { name: "查看／處理" }).click();
+  await page.getByRole("button", { name: "修改登記資料" }).click();
+  let saveRoute, refreshRoute;
+  let saves = 0;
+  await page.route("**/functions/v1/staff", async (route) => {
+    const { action } = route.request().postDataJSON();
+    if (action === "save_registration") { saves++; saveRoute = route; return; }
+    if (action === "list_registrations") { refreshRoute = route; return; }
+    await route.fallback();
+  });
+  await page.getByRole("button", { name: "儲存登記" }).click();
+  await expect.poll(() => Boolean(saveRoute)).toBe(true);
+  await expect(page.getByRole("button", { name: "儲存中…" })).toBeDisabled();
+  await page.locator("#edit-registration-form").evaluate((form) => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  await saveRoute.fulfill({ json: { success: true } });
+  await expect.poll(() => Boolean(refreshRoute)).toBe(true);
+  await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
+  expect(saves).toBe(1);
+  await refreshRoute.fulfill({ status: 503, json: { error: "測試刷新失敗" } });
+  await expect(page.locator("#message")).toHaveText("登記資料已儲存，但畫面未能重新整理：測試刷新失敗");
+  await expect(page.getByRole("button", { name: "儲存登記" })).toBeEnabled();
+  await expect(page.locator("#edit-registration-form")).not.toHaveAttribute("aria-busy");
+});
+
+test("slim list loads detail on demand and save reuses canonical data without recounting", async ({ page }) => {
+  const requests = [];
+  const person = { id: "223e4567-e89b-42d3-a456-426614174000", serial_no: 1, full_name: "測試登記", district_id: 1,
+    record_status: "active", import_status: "pending", meal_identity: "general", registration_choices: [], children: [] };
+  const saved = { ...person, meal_identity: "student" };
+  await mockStaff(page, "staff", (body) => requests.push(body), "測試登記", {
+    me: () => ({ json: { profile: { display_name: "服事者", role: "staff", must_change_password: false },
+      settings: { event_name: "測試" }, districts: [{ id: 1, name: "林森" }], activities: [], program: [],
+      identities: [{ code: "general", name: "一般", is_active: true }, { code: "student", name: "學生", is_active: true }] } }),
+    list_registrations: () => ({ json: { count: 1, registrations: [{ ...person, registration_choices: undefined }] } }),
+    get_registration: () => ({ json: { registration: person } }),
+    save_registration: () => ({ json: { success: true, registration: saved } }),
+  });
+  await login(page);
+  expect(requests.filter((r) => r.action === "list_reference")).toHaveLength(0);
+  expect(requests.filter((r) => r.action === "get_registration")).toHaveLength(0);
+  await page.getByRole("button", { name: "查看／處理" }).click();
+  await page.getByRole("button", { name: "修改登記資料" }).click();
+  await page.locator('#edit-registration-form [name="meal_identity"]').selectOption("student");
+  await page.getByRole("button", { name: "儲存登記" }).click();
+  await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
+  await expect(page.getByRole("button", { name: "修改登記資料" })).toBeVisible();
+  expect(requests.filter((r) => r.action === "get_registration")).toHaveLength(1);
+  await expect.poll(() => requests.filter((r) => r.action === "list_registrations").at(-1)?.skip_count).toBe(true);
+  await expect(page.locator('#edit-registration-form [name="meal_identity"]')).toHaveValue("student");
+});
+
+test("a slower earlier detail load cannot replace or fail the record opened after it", async ({ page }) => {
+  const people = ["甲", "乙"].map((full_name, index) => ({ id: `${index + 3}23e4567-e89b-42d3-a456-426614174000`, serial_no: index + 1,
+    full_name, district_id: 1, record_status: "active", import_status: "pending", registration_choices: [], updated_at: "2026-11-04T00:00:00Z" }));
+  await mockStaff(page, "staff", () => {}, "測試登記", { list_registrations: () => ({ json: { count: 2, registrations: people } }) });
+  await login(page);
+  let slow;
+  await page.route("**/functions/v1/staff", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "get_registration" && body.registration_id === people[0].id) { slow = route; return; }
+    await route.fallback();
+  });
+  const open = page.getByRole("button", { name: "查看／處理" });
+  await open.nth(0).click();
+  await expect.poll(() => Boolean(slow)).toBe(true);
+  await open.nth(1).click();
+  await expect(page.locator("#detail-title")).toContainText("乙");
+  const stale = page.waitForResponse((response) => response.request().postDataJSON()?.registration_id === people[0].id);
+  await slow.fulfill({ status: 404, json: { error: "找不到登記紀錄" } });
+  await stale;
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await expect(page.locator("#detail-title")).toContainText("乙");
+  await expect(page.locator("#message")).not.toHaveText("找不到登記紀錄");
+});
+
+test("statistics render a million registrations using aggregates without downloading registrations", async ({ page }) => {
+  const requests = [];
+  await mockStaff(page, "staff", (body) => requests.push(body), "測試登記", {
+    registration_statistics: () => ({ json: { statistics: {
+      people: [{ district_id: 1, meal_identity: "general", child_type: null, count: 1_000_000, no_identity: 0 }],
+      choices: [{ district_id: 1, meal_identity: "general", child_type: null, activity_id: 1, attending: true, eligible: true, count: 1_000_000 }],
+      hosting: [{ status: null, guest_type: null, registrations: 1_000_000, people: 0 }],
+      pickup: [{ status: null, registrations: 1_000_000, people: 0 }],
+    } } }),
+  });
+  await login(page, "統計與匯出");
+  const listsBefore = requests.filter((r) => r.action === "list_registrations").length;
+  await page.getByRole("button", { name: "更新統計" }).click();
+  await expect(page.locator("#stats-summary")).toContainText("有效登記 1000000 筆；預估費用 NT$0");
+  expect(requests.filter((r) => r.action === "list_registrations")).toHaveLength(listsBefore);
+  expect(requests.filter((r) => r.action === "registration_statistics")).toHaveLength(1);
 });
 
 test("CSV neutralizes spreadsheet formulas", async ({ page }, testInfo) => {
@@ -978,9 +1096,9 @@ test("the registration list filters by 區 together with the name, keeps both wh
   await page.locator("#next-page").click();
   await expect(page.locator("#page-number")).toHaveText("第 2 頁");
   expect(lists).toEqual([
-    { action: "list_registrations", page: 0, search: "" },
-    { action: "list_registrations", page: 0, search: "王", district_id: 2 },
-    { action: "list_registrations", page: 1, search: "王", district_id: 2 },
+    { action: "list_registrations", summary: true, page: 0, search: "" },
+    { action: "list_registrations", summary: true, page: 0, search: "王", district_id: 2 },
+    { action: "list_registrations", summary: true, page: 1, search: "王", district_id: 2 },
   ]);
 
   // A failed load keeps the conditions from before 清除條件, in the fields and on the list.
@@ -998,7 +1116,7 @@ test("the registration list filters by 區 together with the name, keeps both wh
   await expect(clear).toBeEnabled();
   await clear.click();
   await expect(page.locator("#page-number")).toHaveText("第 1 頁");
-  expect(lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  expect(lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "" });
   await expect(clear).toBeDisabled();
 
   // 登出 clears the conditions for the next login on the same page.
@@ -1010,7 +1128,7 @@ test("the registration list filters by 區 together with the name, keeps both wh
   await page.locator('#login-form input[name="username"]').fill("tester");
   await page.locator('#login-form input[name="password"]').fill("test-password");
   await page.getByRole("button", { name: "登入" }).click();
-  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "" });
   await expect(name).toHaveValue("");
   await expect(district).toHaveValue("");
   await expect(clear).toBeDisabled();
@@ -1042,7 +1160,7 @@ test("an expired login while paging a 區 search does not hand the conditions to
   await page.locator('#login-form input[name="password"]').fill("test-password");
   await page.getByRole("button", { name: "登入" }).click();
   await expect.poll(() => lists.length).toBe(4);
-  expect(lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  expect(lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "" });
   await expect(form.locator('input[name="search"]')).toHaveValue("");
   await expect(form.locator('select[name="district_id"]')).toHaveValue("");
   await expect(page.getByRole("button", { name: "清除條件" })).toBeDisabled();
@@ -1716,15 +1834,15 @@ test("the 兒童 condition lists children only, with 區 and paging, and 清除�
   await page.locator("#next-page").click();
   await expect(page.locator("#page-number")).toHaveText("第 2 頁");
   expect(lists.slice(1)).toEqual([
-    { action: "list_registrations", page: 0, search: "", district_id: 1, children_only: true },
-    { action: "list_registrations", page: 1, search: "", district_id: 1, children_only: true },
+    { action: "list_registrations", summary: true, page: 0, search: "", district_id: 1, children_only: true },
+    { action: "list_registrations", summary: true, page: 1, search: "", district_id: 1, children_only: true },
   ]);
   await child.selectOption("preschool");
   await page.getByRole("button", { name: "搜尋" }).click();
   await expect.poll(() => lists.at(-1).meal_identity).toBe("preschool");
   await clear.click();
   await expect(child).toHaveValue("");
-  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "" });
 
   await child.selectOption("all_children");
   await page.getByRole("button", { name: "搜尋" }).click();
@@ -1733,7 +1851,7 @@ test("the 兒童 condition lists children only, with 區 and paging, and 清除�
   await page.locator('#login-form input[name="username"]').fill("tester");
   await page.locator('#login-form input[name="password"]').fill("test-password");
   await page.getByRole("button", { name: "登入" }).click();
-  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "" });
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "" });
   await expect(child).toHaveValue("");
 });
 
@@ -1764,7 +1882,7 @@ test("協助登記 for a child hides both surveys and requires the parent's name
   await form.locator('input[name="parent_name"]').fill(" 王爸爸 ");
   await page.getByRole("button", { name: "建立協助登記" }).click();
   await expect(page.locator("#message")).toHaveText("協助登記已建立。");
-  expect(created[0]).toMatchObject({ full_name: "王小美", is_child: true, meal_identity: "child", child_type: "elementary", parent_name: "王爸爸", hosting: null, pickup: null });
+  expect(created[0]).toMatchObject({ full_name: "王小美", meal_identity: "child", child_type: "elementary", parent_name: "王爸爸", hosting: null, pickup: null });
   // A new registration starts with no identity selected.
   await expect(form.getByRole("combobox", { name: "身分別", exact: true })).toHaveValue("");
   await expect(form.locator(".hosting-panel")).toBeHidden();
@@ -1802,10 +1920,10 @@ test("a parent's record lists the children by name, and a name opens that child'
   await page.locator('#search-form select[name="district_id"]').selectOption({ label: "中山" });
   await page.locator("#search-form").getByRole("combobox", { name: "身分別", exact: true }).selectOption("all_children");
   await page.getByRole("button", { name: "搜尋" }).click();
-  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "", district_id: 2, children_only: true });
+  await expect.poll(() => lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "", district_id: 2, children_only: true });
   await children.getByRole("button", { name: "#4 王小明" }).click();
   await expect(page.locator("#detail-title")).toHaveText("登記 #4｜王小明兒童（國小）");
-  expect(lists.at(-1)).toEqual({ action: "list_registrations", page: 0, search: "4" });
+  expect(lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "4" });
   await expect(page.locator('#search-form input[name="search"]')).toHaveValue("4");
   await expect(page.locator('#search-form select[name="district_id"]')).toHaveValue("");
   await expect(page.locator("#search-form").getByRole("combobox", { name: "身分別", exact: true })).toHaveValue("");
@@ -1839,7 +1957,7 @@ test("a child's record shows the parent's name read-only and can be changed back
   await expect(form.locator(".parent-name")).toBeHidden();
   await page.getByRole("button", { name: "儲存登記" }).click();
   await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
-  expect(saved).toMatchObject({ is_child: false, pickup: { status: "no", count: 0 } });
+  expect(saved).toMatchObject({ child_type: "", pickup: { status: "no", count: 0 } });
   expect(saved.hosting.status).toBe("not_hosting");
   expect(saved).not.toHaveProperty("parent_name");
 });
@@ -1902,6 +2020,10 @@ test("admins manage meal identities, and prices typed into the activity form sur
   });
   await login(page, "身分別");
   const form = page.locator("#identity-form");
+  const cancel = form.getByRole("button", { name: "取消編輯" });
+  const submit = form.locator('button[type="submit"]');
+  // A new identity needs no way out, so 取消編輯 shows only while one is being edited.
+  await expect(cancel).toBeHidden();
   await form.getByLabel("身分名稱").fill("志工");
   await form.getByLabel("開放報名者選擇").uncheck();
   await form.getByRole("button", { name: "儲存身分" }).click();
@@ -1915,6 +2037,8 @@ test("admins manage meal identities, and prices typed into the activity form sur
   // Renaming an identity redraws the price fields without losing what was typed.
   await go(page, "身分別");
   await page.locator("#identity-rows tr").filter({ hasText: "志工" }).getByRole("button", { name: "編輯" }).click();
+  await expect(submit).toHaveText("儲存身分（編輯：志工）");
+  await expect(cancel).toBeVisible();
   await form.getByLabel("身分名稱").fill("服事者");
   await form.getByLabel("顯示標籤").check();
   await form.locator('[name="badge_color_hex"]').fill("#123456");
@@ -1926,6 +2050,8 @@ test("admins manage meal identities, and prices typed into the activity form sur
   await expect(badge).toHaveCSS("color", "rgb(255, 255, 255)");
   expect(writes[1].data).toMatchObject({ show_badge: true, badge_color: "#123456" });
   await expect(form.locator('[name="code"]')).toHaveValue("");
+  await expect(submit).toHaveText("儲存身分");
+  await expect(cancel).toBeHidden();
   await page.locator("#identity-rows tr").filter({ hasText: "服事者" }).getByRole("button", { name: "編輯" }).click();
   await expect(form.getByLabel("顯示標籤")).toBeChecked();
   await expect(form.locator('[name="badge_color_hex"]')).toHaveValue("#123456");
@@ -1933,7 +2059,12 @@ test("admins manage meal identities, and prices typed into the activity form sur
   expect(await form.locator('[name="badge_color_hex"]').evaluate((input) => input.validity.patternMismatch)).toBe(true);
   await form.getByRole("button", { name: "儲存身分" }).click();
   expect(writes).toHaveLength(2);
-  await form.getByRole("button", { name: "取消／新增" }).click();
+  await cancel.focus();
+  await page.keyboard.press("Enter");
+  await expect(submit).toHaveText("儲存身分");
+  await expect(cancel).toBeHidden();
+  await expect(form.getByLabel("身分名稱")).toBeFocused();
+  await expect(form.locator('[name="code"]')).toHaveValue("");
   await expect(form.getByLabel("顯示標籤")).not.toBeChecked();
   await expect(form.locator('[name="badge_color_hex"]')).toHaveValue("#e1effe");
   await go(page, "活動");
@@ -1960,6 +2091,21 @@ test("admins manage meal identities, and prices typed into the activity form sur
   await go(page, "活動");
   await expect(page.locator("#general-price-name")).toHaveText("成人");
   await expect(page.getByLabel("成人每人費用")).toBeVisible();
+
+  // An edit left open at 登出 does not carry over to whoever logs in next.
+  await go(page, "身分別");
+  await page.locator("#identity-rows tr").filter({ hasText: "兒童（國小）" }).getByRole("button", { name: "編輯" }).click();
+  await expect(cancel).toBeVisible();
+  await page.getByRole("button", { name: "登出" }).click();
+  // Same page, no reload: a reload would clear the form by itself.
+  await page.locator('#login-form input[name="username"]').fill("tester");
+  await page.locator('#login-form input[name="password"]').fill("test-password");
+  await page.getByRole("button", { name: "登入" }).click();
+  await go(page, "身分別");
+  await expect(form.getByLabel("身分名稱")).toHaveValue("");
+  await expect(form.getByLabel("啟用", { exact: true })).toBeEnabled();
+  await expect(submit).toHaveText("儲存身分");
+  await expect(cancel).toBeHidden();
 });
 
 test("configured badges use custom identities and hide child badges without changing counts", async ({ page }) => {

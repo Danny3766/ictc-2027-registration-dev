@@ -191,7 +191,7 @@ test("query is read-only until editing and returns to confirmation after saving"
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({
     action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    meal_identity: "general", is_child: false, child_type: "", parent_name: null,
+    meal_identity: "general", child_type: "", parent_name: null,
   });
   await expect(page.locator("#edit-form input[type=radio]")).toHaveCount(0);
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：不參加");
@@ -581,7 +581,7 @@ test("while hosting is closed, the lookup shows the answer read-only and saves a
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    meal_identity: "general", is_child: false, child_type: "", parent_name: null });
+    meal_identity: "general", child_type: "", parent_name: null });
 });
 
 test("a lookup without a hosting answer hides the section while hosting is closed", async ({ page }) => {
@@ -654,7 +654,7 @@ test("hosting closed during an edit keeps the activity edits and drops only the 
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    meal_identity: "general", is_child: false, child_type: "", parent_name: null });
+    meal_identity: "general", child_type: "", parent_name: null });
   await page.getByRole("tab", { name: "登記參加" }).click();
   await expect(page.locator("#hosting-section")).toBeHidden();
   await expect(page.locator('#hosting-fields input, #hosting-fields select')).toHaveCount(0);
@@ -778,7 +778,7 @@ test("hosting closed while answering it for the first time keeps activity edits 
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[2]).toEqual({ action: "update", full_name: "測試登記", district_id: 1, choices: [{ activity_id: 1, attending: false }],
-    meal_identity: "general", is_child: false, child_type: "", parent_name: null });
+    meal_identity: "general", child_type: "", parent_name: null });
 });
 
 test("a description sent while editing shows in the edit view and the registration tab", async ({ page }) => {
@@ -1067,7 +1067,7 @@ test("a sign-up from before a restriction is kept until the person saves another
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   expect(requests[1]).toEqual({
     action: "update", full_name: "測試登記", district_id: 1, meal_identity: "general",
-    choices: [{ activity_id: 1, attending: false }, { activity_id: 2, attending: false }], is_child: false, child_type: "", parent_name: null,
+    choices: [{ activity_id: 1, attending: false }, { activity_id: 2, attending: false }], child_type: "", parent_name: null,
   });
   await expect(page.locator('#edit-form [name="meal_identity"]')).toHaveValue("general");
 });
@@ -1207,7 +1207,7 @@ test("a child skips both surveys, may join a hosting-only activity, and must giv
   await parent.fill(" 王爸爸 ");
   await page.getByRole("button", { name: "送出登記" }).click();
   await expect(page).toHaveURL(/success\.html$/);
-  expect(requests[0]).toMatchObject({ action: "create", full_name: "王小明", is_child: true, child_type: "elementary", parent_name: "王爸爸",
+  expect(requests[0]).toMatchObject({ action: "create", full_name: "王小明", child_type: "elementary", parent_name: "王爸爸",
     choices: [{ activity_id: 1, attending: true }, { activity_id: 2, attending: true }] });
   expect(requests[0]).not.toHaveProperty("hosting");
   expect(requests[0]).not.toHaveProperty("pickup");
@@ -1236,7 +1236,7 @@ test("unticking 兒童 brings the surveys back and sends no parent name", async 
   await page.locator('#pickup-fields [name="pickup_status"][value="no"]').check();
   await page.getByRole("button", { name: "送出登記" }).click();
   await expect(page).toHaveURL(/success\.html$/);
-  expect(requests[0]).toMatchObject({ is_child: false, pickup: { status: "no", count: 0 } });
+  expect(requests[0]).toMatchObject({ pickup: { status: "no", count: 0 } });
   expect(requests[0]).not.toHaveProperty("parent_name");
   expect(requests[0].hosting.status).toBe("not_hosting");
   await expect(page.locator("#summary-identity")).toHaveText("王大明｜測試區");
@@ -1270,7 +1270,7 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
   await expect(page.locator("#edit-hosting-section")).toBeHidden();
   await edit.locator('input[name="parent_name"]').fill("王媽媽");
   await page.getByRole("button", { name: "儲存修改" }).click();
-  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, child_type: "elementary", parent_name: "王媽媽" });
+  expect(requests.at(-1)).toMatchObject({ action: "update", child_type: "elementary", parent_name: "王媽媽" });
   expect(requests.at(-1)).not.toHaveProperty("hosting");
   expect(requests.at(-1)).not.toHaveProperty("pickup");
   await expect(edit.locator('input[name="parent_name"]')).toHaveValue("王媽媽");
@@ -1284,7 +1284,7 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
   await expect(edit.locator(".parent-name")).toBeHidden();
   await expect(edit.locator('input[name="activity_2"][value="false"]')).toBeChecked();
   await page.getByRole("button", { name: "儲存修改" }).click();
-  expect(requests.at(-1)).toMatchObject({ meal_identity: "general", is_child: false, child_type: "", parent_name: null, pickup: { status: "no", count: 0 },
+  expect(requests.at(-1)).toMatchObject({ meal_identity: "general", child_type: "", parent_name: null, pickup: { status: "no", count: 0 },
     choices: [{ activity_id: 1, attending: true }, { activity_id: 2, attending: false }] });
   expect(requests.at(-1).hosting.status).toBe("not_hosting");
 });
@@ -1318,7 +1318,7 @@ test("an adult becoming a child must give the parent's name before saving", asyn
   expect(requests.filter((body) => body.action === "update")).toHaveLength(0);
   await edit.locator('input[name="parent_name"]').fill("王爸爸");
   await page.getByRole("button", { name: "儲存修改" }).click();
-  expect(requests.at(-1)).toMatchObject({ action: "update", is_child: true, child_type: "elementary", parent_name: "王爸爸" });
+  expect(requests.at(-1)).toMatchObject({ action: "update", child_type: "elementary", parent_name: "王爸爸" });
   expect(requests.at(-1)).not.toHaveProperty("hosting");
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
   await expect(page.locator("#edit-hosting-section")).toBeHidden();

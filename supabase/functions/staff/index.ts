@@ -135,6 +135,15 @@ export async function readRequestJson(request) {
   return JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
 }
 
+export async function attachRegistrationChildren(database, rows) {
+  const parents = rows.filter((row) => row.record_status === "active" && !row.is_child)
+    .map((row) => ({ district_id: row.district_id, name_key: row.name_key }));
+  if (!parents.length) return null;
+  const { data, error } = await database.rpc("staff_registration_children", { p_parents: parents });
+  if (!error) childrenByParent(rows, data);
+  return error;
+}
+
 export async function handler(request) {
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers });
   if (request.method !== "POST") return response({ error: "METHOD_NOT_ALLOWED" }, 405);
@@ -169,7 +178,8 @@ export async function handler(request) {
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) return response({ error: "INVALID_REQUEST" }, 400);
 
-  if (body.action === "me") return response({ profile });
+  if (body.include_reference !== undefined && typeof body.include_reference !== "boolean") return response({ error: "INVALID_REQUEST" }, 400);
+  if (body.action === "me" && (!body.include_reference || profile.must_change_password)) return response({ profile });
   if (body.action === "change_password") {
     if (typeof body.current_password !== "string" || !body.current_password) return response({ error: "請輸入目前密碼" }, 400);
     if (!validPassword(body.password)) return response({ error: passwordRuleMessage }, 400);
@@ -210,7 +220,33 @@ export async function handler(request) {
 
   if (profile.must_change_password) return response({ error: "請先更改初始密碼" }, 403);
 
+  if (body.action === "registration_statistics") {
+    const { data, error } = await database.rpc("staff_registration_statistics", { p_actor: profile.auth_user_id });
+    if (error) {
+      if (lostAccess(error)) return lostAccessResponse();
+      console.error("Failed to load registration statistics", error);
+      return response({ error: "統計載入失敗" }, 503);
+    }
+    return response({ statistics: data });
+  }
+
+  if (body.action === "get_registration") {
+    if (!isUuid(body.registration_id)) return response({ error: "INVALID_REQUEST" }, 400);
+    const { data, error } = await database.rpc("staff_registration_detail", {
+      p_actor: profile.auth_user_id, p_registration_id: body.registration_id,
+    });
+    if (error) {
+      if (lostAccess(error)) return lostAccessResponse();
+      console.error("Failed to load registration detail", error);
+      return response({ error: "登記資料載入失敗" }, 503);
+    }
+    if (!data) return response({ error: "找不到登記紀錄" }, 404);
+    return response({ registration: data });
+  }
+
   if (body.action === "list_registrations") {
+    if (body.skip_count !== undefined && typeof body.skip_count !== "boolean") return response({ error: "INVALID_REQUEST" }, 400);
+    if (body.summary !== undefined && typeof body.summary !== "boolean") return response({ error: "INVALID_REQUEST" }, 400);
     const page = Number(body.page);
     if (!Number.isInteger(page) || page < 0 || page > 10000) return response({ error: "INVALID_REQUEST" }, 400);
     // before_serial pages by key, so rows inserted during a full export cannot shift or duplicate pages.
@@ -219,11 +255,12 @@ export async function handler(request) {
       return response({ error: "INVALID_REQUEST" }, 400);
     }
     if (!validDistrictFilter(body.district_id)) return response({ error: "INVALID_REQUEST" }, 400);
-    // The 兒童 filter: left out lists everyone, true lists children only, and child_type narrows them to one type.
+    // The 兒童 filter: left out lists everyone, true lists children only; one child type is a meal_identity filter.
     if (body.children_only !== undefined && body.children_only !== true) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
-      .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,registration_choices(activity_id,attending),meal_identity,is_child,child_type,parent_name,name_key,registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)",
-        beforeSerial === null ? { count: "exact" } : undefined)
+      .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,meal_identity,is_child,child_type,parent_name,name_key"
+        + (beforeSerial !== null || !body.summary ? ",registration_choices(activity_id,attending),registration_hosting(status,guest_type,guest_count),registration_pickup(status,count)" : ""),
+        beforeSerial === null && !body.skip_count ? { count: "exact" } : undefined)
       .order("serial_no", { ascending: false });
     // 10 rows a page, matching REGISTRATIONS_PER_PAGE in site/admin/staff.js.
     query = beforeSerial === null ? query.range(page * 10, page * 10 + 9)
@@ -235,8 +272,6 @@ export async function handler(request) {
         : query.ilike("name_key", `%${nameKey(body.search).replaceAll(/[%*,()]/g, "").replaceAll(/[\\_]/g, "\\$&")}%`);
     }
     if (body.district_id != null) query = query.eq("district_id", body.district_id);
-    if (body.child_type != null && !["preschool", "elementary"].includes(body.child_type)) return response({ error: "INVALID_REQUEST" }, 400);
-    if (body.child_type) query = query.eq("child_type", body.child_type);
     if (body.meal_identity != null && !validMealIdentity(body.meal_identity)) return response({ error: "INVALID_REQUEST" }, 400);
     if (body.meal_identity) query = query.eq("meal_identity", body.meal_identity);
     if (body.children_only) query = query.eq("is_child", true);
@@ -246,31 +281,17 @@ export async function handler(request) {
       return response({ error: "名單載入失敗" }, 503);
     }
     // Only the 10-row list shows 親子; one indexed lookup covers the page. The export pages skip it.
-    const parents = beforeSerial === null ? data.filter((row) => row.record_status === "active" && !row.is_child)
-      .map((row) => ({ district_id: row.district_id, name_key: row.name_key })) : [];
-    if (parents.length) {
-      const { data: children, error: childrenError } = await database.rpc("registration_children", { p_parents: parents });
+    if (beforeSerial === null) {
+      const childrenError = await attachRegistrationChildren(database, data);
       if (childrenError) {
         console.error("Failed to list registration children", childrenError);
         return response({ error: "名單載入失敗" }, 503);
       }
-      // The lookup gives serial numbers only; the record view lists the children by name too.
-      if (children.length) {
-        const { data: names, error: namesError } = await database.from("registrations")
-          .select("serial_no,full_name").in("serial_no", children.map((child) => child.serial_no));
-        if (namesError) {
-          console.error("Failed to name registration children", namesError);
-          return response({ error: "名單載入失敗" }, 503);
-        }
-        const nameOf = new Map(names.map((item) => [item.serial_no, item.full_name]));
-        for (const child of children) child.full_name = nameOf.get(child.serial_no) ?? "";
-      }
-      childrenByParent(data, children);
     }
     return response({ registrations: data, count });
   }
 
-  if (body.action === "list_reference") {
+  if (body.action === "list_reference" || body.action === "me" && body.include_reference) {
     const [settings, districts, activities, program, identities, usedIdentities] = await Promise.all([
       database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_lookup_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description").single(),
       database.from("districts").select("id,name,sort_order").order("sort_order"),
@@ -281,9 +302,10 @@ export async function handler(request) {
     ]);
     if ([settings, districts, activities, program, identities, usedIdentities].some((item) => item.error)) {
       console.error("Failed to load staff reference data", [settings, districts, activities, program, identities, usedIdentities].map((item) => item.error));
+      if (body.action === "me") return response({ profile, reference_error: "後台資料載入失敗" });
       return response({ error: "後台資料載入失敗" }, 503);
     }
-    return response({ settings: settings.data, districts: districts.data, activities: activities.data, program: program.data, identities: identities.data, used_identity_codes: usedIdentities.data });
+    return response({ ...(body.action === "me" && { profile }), settings: settings.data, districts: districts.data, activities: activities.data, program: program.data, identities: identities.data, used_identity_codes: usedIdentities.data });
   }
 
   if (["save_registration", "set_import_status", "void_registration"].includes(body.action)) {
@@ -292,7 +314,7 @@ export async function handler(request) {
     if (body.meal_identity != null) body.child_type = childTypeOf(body.meal_identity);
     if (!validChild(body.child_type, body.parent_name)) return response({ error: parentNameMessage }, 400);
     const operation = {
-      save_registration: ["staff_update_registration_with_pickup", {
+      save_registration: ["staff_update_registration_result", {
         p_registration_id: body.registration_id, p_full_name: body.full_name,
         p_district_id: body.district_id, p_choices: body.choices, p_hosting: body.hosting ?? null,
         p_meal_identity: body.meal_identity ?? null, p_pickup: body.pickup ?? null,
@@ -323,7 +345,7 @@ export async function handler(request) {
       return response({ error: "登記資料更新失敗" }, 503);
     }
     if (!data) return response({ error: "找不到登記紀錄" }, 404);
-    return response({ success: true });
+    return response(body.action === "save_registration" ? { success: true, registration: data } : { success: true });
   }
 
   if (body.action === "create_registration") {

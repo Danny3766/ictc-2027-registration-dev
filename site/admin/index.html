@@ -246,7 +246,7 @@
         </section>
 
         <section id="admin-identities" class="card" data-view="admin-identities" hidden>
-          <h2>用餐身分</h2>
+          <h2>身分別</h2>
           <form id="identity-form" class="staff-form compact-form">
             <input name="code" type="hidden" />
             <div class="field-row">
@@ -254,9 +254,9 @@
               <label class="check"><input name="is_active" type="checkbox" checked />啟用</label>
               <label class="check"><input name="public_selectable" type="checkbox" checked />開放報名者選擇</label>
               <label class="check"><input name="show_badge" type="checkbox" />顯示標籤</label>
-              <label>標籤底色<input name="badge_color" type="color" value="#e1effe" /></label>
+              <label class="swatch">標籤底色<input name="badge_color" type="color" value="#e1effe" /></label>
               <label>底色色碼<input name="badge_color_hex" value="#e1effe" pattern="#[0-9a-fA-F]{6}" maxlength="7" required title="六位 HEX 色碼，例如 #e1effe" /></label>
-              <button type="submit">儲存身分</button><button type="reset" class="secondary">取消／新增</button>
+              <button type="submit">儲存身分</button><button type="reset" class="secondary" hidden>取消編輯</button>
             </div>
           </form>
           <p class="hint">已使用的身分只能停用；一般與兩種兒童身分保留。兒童身分依兒童類型自動帶入。</p>

@@ -8,7 +8,6 @@ const corsHeaders = {
 const encoder = new TextEncoder();
 const notFoundMessage = "查無登記資料，請確認姓名寫法與區和登記時相同";
 const lookupClosedMessage = "查詢功能暫停中，請稍後再試";
-const invalidHostingMessage = "請檢查開家接待內容";
 // The page branches on `code`, never on the message text, so the wording can change freely.
 const hostingClosed = { error: "開家接待調查已關閉", code: "HOSTING_CLOSED" };
 // A page loaded before this release has no hosting fields; its users can only act on "reload".
@@ -16,33 +15,39 @@ const hostingRequired = { error: "開家接待調查已開放，請回答開家�
 const pickupClosed = { error: "接機接待調查已關閉", code: "PICKUP_CLOSED" };
 const pickupRequired = { error: "接機接待調查已開放，請回答是否可以接機；看不到接機欄位時請重新整理頁面", code: "PICKUP_REQUIRED" };
 
-// The page shows the hosting fields when the switch opened after it loaded; the reply carries the
+// The page shows the survey fields when the switch opened after it loaded; the reply carries the
 // description too, which the admin may have written meanwhile. It is public text, like GET returns.
-async function hostingRequiredResponse(database) {
+async function surveyRequiredResponse(database, kind) {
+  const body = kind === "pickup" ? pickupRequired : hostingRequired;
+  const column = `${kind}_description`;
   try {
-    const { data, error } = await database.from("site_settings").select("hosting_description").single();
+    const { data, error } = await database.from("site_settings").select(column).single();
     // Without a successful read the field is left out, so the page keeps the description it has.
-    if (!error && data) return response({ ...hostingRequired, hosting_description: data.hosting_description }, 409);
+    if (!error && data) return response({ ...body, [column]: data[column] }, 409);
   } catch (error) {
-    console.error("Failed to read hosting description", error);
+    console.error(`Failed to read ${column}`, error);
   }
-  return response(hostingRequired, 409);
+  return response(body, 409);
 }
-async function pickupRequiredResponse(database) {
-  const { data } = await database.from("site_settings").select("pickup_description").single();
-  return response({ ...pickupRequired, pickup_description: data?.pickup_description }, 409);
-}
-// A page loaded before an admin changed prices or audiences can miss the question or show an
-// activity as open; reloading shows the current form. These stay 400: the lookup page treats a 409
-// on update as "this registration can no longer be changed" and leaves the edit form.
-function mealResponse(error) {
-  if (error?.message?.includes("MEAL_IDENTITY_REQUIRED")) {
-    return response({ error: "請選擇身分別；看不到這一題時請重新整理頁面" }, 400);
-  }
-  if (error?.message?.includes("INVALID_MEAL_IDENTITY")) return response({ error: "請檢查身分別" }, 400);
-  if (error?.message?.includes("AUDIENCE_RESTRICTED")) {
+// The errors create and update share, or null. A page loaded before an admin changed prices or
+// audiences can miss the question or show an activity as open; reloading shows the current form.
+// Those stay 400: the lookup page treats a 409 on update as "this registration can no longer be
+// changed" and leaves the edit form.
+export function formErrorResponse(error, database) {
+  const message = error?.message ?? "";
+  if (message.includes("MEAL_IDENTITY_REQUIRED")) return response({ error: "請選擇身分別；看不到這一題時請重新整理頁面" }, 400);
+  if (message.includes("INVALID_MEAL_IDENTITY")) return response({ error: "請檢查身分別" }, 400);
+  if (message.includes("AUDIENCE_RESTRICTED")) {
     return response({ error: "有活動不符合報名對象，請確認開家、接機與活動選擇；畫面不符時請重新整理頁面" }, 400);
   }
+  if (message.includes("HOSTING_CLOSED")) return response(hostingClosed, 409);
+  if (message.includes("HOSTING_REQUIRED")) return surveyRequiredResponse(database, "hosting");
+  if (message.includes("PICKUP_CLOSED")) return response(pickupClosed, 409);
+  if (message.includes("PICKUP_REQUIRED")) return surveyRequiredResponse(database, "pickup");
+  if (message.includes("INVALID_PICKUP")) return response({ error: "請檢查接機接待內容" }, 400);
+  if (message.includes("INVALID_HOSTING")) return response({ error: "請檢查開家接待內容" }, 400);
+  if (message.includes("INVALID_PARENT_NAME")) return response({ error: parentNameMessage }, 400);
+  if (isInputError(error)) return response({ error: "請檢查登記資料" }, 400);
   return null;
 }
 let createClient;
@@ -216,22 +221,14 @@ export async function handler(request) {
       p_parent_name: body.child_type ? body.parent_name : null,
     });
     if (!error) return response({ success: true }, 201);
-    const mealError = mealResponse(error);
-    if (mealError) return mealError;
     if (error.message.includes("NAME_TAKEN")) {
       return response({ error: "此姓名與區已經登記過，如需查看或修改，請使用「查詢或修改登記」" }, 409);
     }
     if (error.message.includes("DUPLICATE_REQUEST")) return response({ error: "DUPLICATE_REQUEST" }, 409);
     if (error.message.includes("CREATE_RATE_LIMITED")) return response({ error: "登記暫時忙碌，請稍後再試" }, 429);
     if (error.message.includes("REGISTRATION_CLOSED")) return response({ error: "登記目前未開放" }, 409);
-    if (error.message.includes("HOSTING_CLOSED")) return response(hostingClosed, 409);
-    if (error.message.includes("HOSTING_REQUIRED")) return hostingRequiredResponse(database);
-    if (error.message.includes("PICKUP_CLOSED")) return response(pickupClosed, 409);
-    if (error.message.includes("PICKUP_REQUIRED")) return pickupRequiredResponse(database);
-    if (error.message.includes("INVALID_PICKUP")) return response({ error: "請檢查接機接待內容" }, 400);
-    if (error.message.includes("INVALID_HOSTING")) return response({ error: invalidHostingMessage }, 400);
-    if (error.message.includes("INVALID_PARENT_NAME")) return response({ error: parentNameMessage }, 400);
-    if (isInputError(error)) return response({ error: "請檢查登記資料" }, 400);
+    const formError = await formErrorResponse(error, database);
+    if (formError) return formError;
     console.error(error.message);
     return response({ error: "登記失敗，請稍後再試" }, 500);
   }
@@ -246,32 +243,25 @@ export async function handler(request) {
   }
 
   if (action === "query") {
-    const { data, error } = await database.rpc("get_registration", {
-      p_full_name: body.full_name, p_district_id: districtId,
-    });
-    if (error?.message.includes("LOOKUP_CLOSED")) return response({ error: lookupClosedMessage }, 503);
+    const params = { p_full_name: body.full_name, p_district_id: districtId };
+    // The three lookups fail alike: the lookup switch closed, or the database failed.
+    const lookupFailed = (error, what) => {
+      if (error?.message.includes("LOOKUP_CLOSED")) return response({ error: lookupClosedMessage }, 503);
+      if (!error) return null;
+      console.error(`Failed to query ${what}`, error);
+      return response({ error: "服務暫時無法使用" }, 503);
+    };
+    const { data, error } = await database.rpc("get_registration", params);
     if (isInputError(error)) return response({ error: "請輸入姓名並選擇區" }, 400);
-    if (error) {
-      console.error("Failed to query registration", error);
-      return response({ error: "服務暫時無法使用" }, 503);
-    }
+    const failed = lookupFailed(error, "registration");
+    if (failed) return failed;
     if (data?.length !== 1) return response({ error: notFoundMessage }, 404);
-    const pickup = await database.rpc("get_registration_pickup", {
-      p_full_name: body.full_name, p_district_id: districtId,
-    });
-    if (pickup.error?.message.includes("LOOKUP_CLOSED")) return response({ error: lookupClosedMessage }, 503);
-    if (pickup.error) {
-      console.error("Failed to query registration pickup", pickup.error);
-      return response({ error: "服務暫時無法使用" }, 503);
-    }
-    const child = await database.rpc("get_registration_child", {
-      p_full_name: body.full_name, p_district_id: districtId,
-    });
-    if (child.error?.message.includes("LOOKUP_CLOSED")) return response({ error: lookupClosedMessage }, 503);
-    if (child.error) {
-      console.error("Failed to query registration child fields", child.error);
-      return response({ error: "服務暫時無法使用" }, 503);
-    }
+    const pickup = await database.rpc("get_registration_pickup", params);
+    const pickupFailed = lookupFailed(pickup.error, "registration pickup");
+    if (pickupFailed) return pickupFailed;
+    const child = await database.rpc("get_registration_child", params);
+    const childFailed = lookupFailed(child.error, "registration child fields");
+    if (childFailed) return childFailed;
     return response({ ...data[0], pickup: pickup.data, is_child: child.data?.is_child === true, child_type: child.data?.child_type ?? null,
       parent_name: child.data?.parent_name ?? null });
   }
@@ -287,18 +277,10 @@ export async function handler(request) {
     p_child_type: body.child_type ?? null,
     p_parent_name: body.child_type ? body.parent_name : null,
   });
-  const mealError = mealResponse(error);
-  if (mealError) return mealError;
   if (error?.message.includes("REGISTRATION_CLOSED")) return response({ error: "登記已截止，資料只能查看" }, 409);
   if (error?.message.includes("LOOKUP_CLOSED")) return response({ error: lookupClosedMessage }, 503);
-  if (error?.message.includes("HOSTING_CLOSED")) return response(hostingClosed, 409);
-  if (error?.message.includes("HOSTING_REQUIRED")) return hostingRequiredResponse(database);
-  if (error?.message.includes("PICKUP_CLOSED")) return response(pickupClosed, 409);
-  if (error?.message.includes("PICKUP_REQUIRED")) return pickupRequiredResponse(database);
-  if (error?.message.includes("INVALID_PICKUP")) return response({ error: "請檢查接機接待內容" }, 400);
-  if (error?.message.includes("INVALID_HOSTING")) return response({ error: invalidHostingMessage }, 400);
-  if (error?.message.includes("INVALID_PARENT_NAME")) return response({ error: parentNameMessage }, 400);
-  if (isInputError(error)) return response({ error: "請檢查登記資料" }, 400);
+  const formError = await formErrorResponse(error, database);
+  if (formError) return formError;
   if (error) {
     console.error("Failed to update registration", error);
     return response({ error: "服務暫時無法使用" }, 503);

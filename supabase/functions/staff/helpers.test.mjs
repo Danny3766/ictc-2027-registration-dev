@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validChild, childrenByParent } from "./index.ts";
+import { readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validChild, childrenByParent, attachRegistrationChildren } from "./index.ts";
 
 test("JSON bodies enforce the byte limit while reading", async () => {
   const payload = '"' + "a".repeat(63_998) + '"';
@@ -121,4 +121,22 @@ test("親子 lists each active adult's active children in the same district; chi
   assert.deepEqual(rows.map((row) => row.children), [
     [{ serial_no: 3, full_name: "王大明" }, { serial_no: 5, full_name: "王小明" }], [], undefined, undefined,
   ]);
+});
+
+test("family enrichment gets names and links in one request and preserves a failed lookup", async () => {
+  const rows = [{ district_id: 1, name_key: "parent", record_status: "active", is_child: false }];
+  let calls = 0;
+  const database = { async rpc(name, params) {
+    calls++;
+    assert.equal(name, "staff_registration_children");
+    assert.deepEqual(params, { p_parents: [{ district_id: 1, name_key: "parent" }] });
+    return { data: [{ district_id: 1, parent_name_key: "parent", serial_no: 3, full_name: "child" }], error: null };
+  } };
+  assert.equal(await attachRegistrationChildren(database, rows), null);
+  assert.equal(calls, 1);
+  assert.deepEqual(rows[0].children, [{ serial_no: 3, full_name: "child" }]);
+  const error = { message: "unavailable" };
+  assert.equal(await attachRegistrationChildren({ rpc: async () => ({ data: null, error }) }, rows), error);
+  assert.deepEqual(rows[0].children, [{ serial_no: 3, full_name: "child" }]);
+  assert.equal(await attachRegistrationChildren({ rpc: () => assert.fail("no parents") }, []), null);
 });

@@ -103,6 +103,9 @@ main.wide .compact-form { max-width: none; }
 .field-row > * { flex: 1 1 12rem; min-width: 0; }
 .field-row > .grow { flex-grow: 2.5; }
 .field-row > .pair { flex-basis: 7rem; }
+/* A color picker only needs room for its swatch, not a whole field's width. */
+.field-row > .swatch { flex: 0 0 auto; }
+.swatch input[type="color"] { width: 4rem; padding: .2rem; cursor: pointer; }
 /* Date and time inputs have a built-in minimum width that would spill into the next field. */
 .field-row input, .field-row select { min-width: 0; }
 /* A check box sits level with the inputs beside it (label text plus its gap above each input). */

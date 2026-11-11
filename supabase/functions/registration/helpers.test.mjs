@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readRequestJson, clientIp, isUuid, sourceKey, validChild, validMealIdentity } from "./index.ts";
+import { readRequestJson, clientIp, isUuid, sourceKey, validChild, validMealIdentity, formErrorResponse } from "./index.ts";
 
 test("JSON bodies enforce the byte limit while reading", async () => {
   const payload = '"' + "a".repeat(63_998) + '"';
@@ -79,4 +79,22 @@ test("a child needs a parent name of 1 to 20 characters; any other child type is
     ["elementary", "名".repeat(21)], ["elementary", 1], ["true", "王爸爸"], [1, "王爸爸"], [{}, "王爸爸"]]) {
     assert.equal(validChild(childType, parentName), false, String([childType, parentName]));
   }
+});
+
+test("create and update map database errors alike; a survey that opened carries its current description", async () => {
+  const database = (row, error = null) => ({ from: () => ({ select: () => ({ single: async () => ({ data: row, error }) }) }) });
+  const mapped = async (message, db = database(null), code) => {
+    const reply = await formErrorResponse({ message, code }, db);
+    return reply && { status: reply.status, body: await reply.json() };
+  };
+  assert.deepEqual(await mapped("PICKUP_REQUIRED", database({ pickup_description: "說明" })),
+    { status: 409, body: { error: "接機接待調查已開放，請回答是否可以接機；看不到接機欄位時請重新整理頁面", code: "PICKUP_REQUIRED", pickup_description: "說明" } });
+  assert.equal((await mapped("HOSTING_REQUIRED", database({ hosting_description: "說明" }))).body.hosting_description, "說明");
+  // A failed read leaves the description out, so the page keeps the one it has.
+  assert.equal("pickup_description" in (await mapped("PICKUP_REQUIRED", database(null, { message: "down" }))).body, false);
+  assert.deepEqual(await mapped("HOSTING_CLOSED"), { status: 409, body: { error: "開家接待調查已關閉", code: "HOSTING_CLOSED" } });
+  assert.equal((await mapped("AUDIENCE_RESTRICTED")).status, 400);
+  assert.equal((await mapped("anything", undefined, "22023")).status, 400);
+  assert.equal(await mapped("NAME_TAKEN"), null);
+  assert.equal(await formErrorResponse(null, database(null)), null);
 });
