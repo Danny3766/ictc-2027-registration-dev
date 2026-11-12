@@ -2157,9 +2157,11 @@ test("admins manage meal identities, and prices typed into the activity form sur
     activities: [{ id: 1, title: "晚餐", category: "meal", is_published: true, fee_amount: 120, activity_identity_prices: [] }] };
   migrateReference(reference);
   const writes = [];
+  let rejectIdentitySave = false;
   await mockStaff(page, "admin", () => {}, "測試登記", {
     list_reference: () => ({ json: reference }),
     save_reference: ({ kind, data }) => {
+      if (kind === "identity" && rejectIdentitySave) return { status: 500, json: { error: "測試儲存失敗" } };
       writes.push({ kind, data });
       if (kind === "identity") {
         const existing = reference.identities.find((item) => item.code === data.code);
@@ -2177,7 +2179,9 @@ test("admins manage meal identities, and prices typed into the activity form sur
   const submit = form.locator('button[type="submit"]');
   // A new identity needs no way out, so 取消編輯 shows only while one is being edited.
   await expect(cancel).toBeHidden();
+  await expect(form.locator('input[type="checkbox"]:checked')).toHaveCount(0);
   await form.getByLabel("身分名稱").fill("志工");
+  await form.getByLabel("啟用", { exact: true }).check();
   await form.getByLabel("開放報名者選擇").uncheck();
   await form.getByRole("button", { name: "儲存身分" }).click();
   await expect(page.locator("#identity-rows")).toContainText("志工");
@@ -2192,10 +2196,32 @@ test("admins manage meal identities, and prices typed into the activity form sur
   await page.locator("#identity-rows tr").filter({ hasText: "志工" }).getByRole("button", { name: "編輯" }).click();
   await expect(submit).toHaveText("儲存身分（編輯：志工）");
   await expect(cancel).toBeVisible();
+  const originalViewport = page.viewportSize();
+  for (const width of [1440, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect.poll(() => form.evaluate((element) => {
+      const save = element.querySelector('button[type="submit"]').getBoundingClientRect();
+      const cancel = element.querySelector('button[type="reset"]').getBoundingClientRect();
+      const name = element.elements.name.getBoundingClientRect();
+      return Math.abs(save.y - cancel.y) < 2 && save.right <= cancel.x && cancel.right <= innerWidth
+        && (innerWidth !== 1440 || Math.abs(save.y - name.y) < 2);
+    }), { message: `Identity actions fit together at ${width}px` }).toBe(true);
+  }
+  await page.setViewportSize(originalViewport);
   await form.getByLabel("身分名稱").fill("服事者");
   await form.getByLabel("顯示標籤").check();
   await form.locator('[name="badge_color_hex"]').fill("#123456");
   await expect(form.locator('[name="badge_color"]')).toHaveValue("#123456");
+  rejectIdentitySave = true;
+  await submit.click();
+  await expect(page.locator("#message")).toHaveText("測試儲存失敗");
+  await expect(form.getByLabel("身分名稱")).toHaveValue("服事者");
+  await expect(form.getByLabel("啟用", { exact: true })).toBeChecked();
+  await expect(form.getByLabel("開放報名者選擇")).not.toBeChecked();
+  await expect(form.getByLabel("顯示標籤")).toBeChecked();
+  await expect(form.locator('[name="badge_color_hex"]')).toHaveValue("#123456");
+  await expect(cancel).toBeVisible();
+  rejectIdentitySave = false;
   await form.getByRole("button", { name: "儲存身分" }).click();
   await expect(page.locator("#identity-rows")).toContainText("服事者");
   const badge = page.locator("#identity-rows .child-badge").filter({ hasText: "服事者" });
@@ -2205,6 +2231,7 @@ test("admins manage meal identities, and prices typed into the activity form sur
   await expect(form.locator('[name="code"]')).toHaveValue("");
   await expect(submit).toHaveText("儲存身分");
   await expect(cancel).toBeHidden();
+  await expect(form.locator('input[type="checkbox"]:checked')).toHaveCount(0);
   await page.locator("#identity-rows tr").filter({ hasText: "服事者" }).getByRole("button", { name: "編輯" }).click();
   await expect(form.getByLabel("顯示標籤")).toBeChecked();
   await expect(form.locator('[name="badge_color_hex"]')).toHaveValue("#123456");
@@ -2218,7 +2245,7 @@ test("admins manage meal identities, and prices typed into the activity form sur
   await expect(cancel).toBeHidden();
   await expect(form.getByLabel("身分名稱")).toBeFocused();
   await expect(form.locator('[name="code"]')).toHaveValue("");
-  await expect(form.getByLabel("顯示標籤")).not.toBeChecked();
+  await expect(form.locator('input[type="checkbox"]:checked')).toHaveCount(0);
   await expect(form.locator('[name="badge_color_hex"]')).toHaveValue("#e1effe");
   await go(page, "活動");
   await expect(page.locator('[data-identity-price="child"]')).toHaveValue("80");
@@ -2257,6 +2284,7 @@ test("admins manage meal identities, and prices typed into the activity form sur
   await go(page, "身分別");
   await expect(form.getByLabel("身分名稱")).toHaveValue("");
   await expect(form.getByLabel("啟用", { exact: true })).toBeEnabled();
+  await expect(form.locator('input[type="checkbox"]:checked')).toHaveCount(0);
   await expect(submit).toHaveText("儲存身分");
   await expect(cancel).toBeHidden();
 });

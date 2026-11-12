@@ -112,6 +112,13 @@ main.wide .compact-form { max-width: none; }
 .field-row > label.check { flex: 0 1 auto; margin-top: 2.6rem; }
 .field-row.checks > label.check { margin-top: 0; }
 .field-row > button { flex: 0 0 auto; align-self: flex-end; margin-top: 0; }
+/* Keep the two identity actions together when the fields wrap; HEX needs only seven characters. */
+#identity-form .identity-color-hex { flex: 0 1 7rem; }
+#identity-form .identity-actions { flex: 0 1 auto; align-self: flex-end; flex-wrap: nowrap; }
+#identity-form .identity-actions button { min-width: 0; }
+@media (max-width: 700px) {
+  #identity-form .identity-actions { flex-basis: 100%; }
+}
 .field-hint { color: #59655f; font-size: .8rem; line-height: 1.4; }
 .card h3 + .compact-form { margin-top: .5rem; }
 
