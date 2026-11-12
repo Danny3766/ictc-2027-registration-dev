@@ -138,7 +138,7 @@ test("passing through 請選擇 keeps the answers on the lookup and new registra
   await expect(page.locator('#edit-pickup [name="pickup_status"][value="yes"]')).toBeChecked();
 });
 
-test("staff settings use independent checkboxes, retain closed selections and allow staff answers for a child",async ({page})=>{
+test("staff settings use independent checkboxes and restrict answers for a child",async ({page})=>{
   const data=reference(),writes=[],creates=[];
   data.identities.push({code:"retired",name:"志工",is_active:false,public_selectable:false});
   data.identities.push({code:"private",name:"同工",is_active:true,public_selectable:false});
@@ -180,19 +180,22 @@ test("staff settings use independent checkboxes, retain closed selections and al
   expect(writes[0].data.pickup_identity_codes).toEqual(["general","student","private"]);
   await page.getByRole("link",{name:"協助登記",exact:true}).click();
   const create=page.locator("#new-registration-form");
+  // One survey left to answer keeps the panel; none hides it.
+  await create.locator('[name="meal_identity"]').selectOption("general");
+  await expect(create.locator(".hosting-panel")).toBeVisible();
+  await expect(page.locator("#new-registration-hosting")).toBeHidden();
+  await expect(page.locator("#new-registration-pickup")).toBeVisible();
   await create.locator('[name="meal_identity"]').selectOption("child");
+  await expect(create.locator(".hosting-panel")).toBeHidden();
   await create.locator('[name="full_name"]').fill("兒童代填");
   await create.locator('[name="district_id"]').selectOption("1");
   await create.locator('[name="parent_name"]').fill("家長");
   await create.locator('[name="activity_1"][value="false"]').check();
-  await create.locator('[name="hosting_status"][value="hosting"]').check();
-  await create.locator('[name="guest_type"]').selectOption("any");
-  await create.locator('[name="guest_count"]').selectOption("3");
-  await create.locator('[name="pickup_status"][value="yes"]').check();
-  await create.locator('[name="pickup_count"]').selectOption("2");
+  await expect(page.locator("#new-registration-hosting")).toBeHidden();
+  await expect(page.locator("#new-registration-pickup")).toBeHidden();
   await create.getByRole("button",{name:"建立協助登記"}).click();
   await expect.poll(()=>creates.length).toBe(1);
-  expect(creates[0]).toMatchObject({meal_identity:"child",hosting:{status:"hosting",guest_count:3},pickup:{status:"yes",count:2}});
+  expect(creates[0]).toMatchObject({meal_identity:"child",hosting:null,pickup:null});
 });
 
 test("saved survey validity from the server overrides the page's old assumptions",async ({page})=>{

@@ -907,7 +907,9 @@ function renderChoiceFields(container, choices = new Map(), requireAll = true) {
   Meals.render(container, currentActivities());
 }
 
-// Staff may answer either survey for every identity; children still need a parent name.
+// Staff, like the public form, may answer only an open survey that the selected identity is asked.
+const surveyOpenFor = (form, kind) => Boolean(reference.settings[`is_${kind}_open`] && Meals.answersHosting(form.elements.meal_identity.value, kind));
+
 // editable is false while a record is only being viewed.
 function syncChildFields(form, editable = true) {
   const child = Boolean(Meals.childType(form.elements.meal_identity.value));
@@ -916,14 +918,21 @@ function syncChildFields(form, editable = true) {
   form.querySelector(".parent-name").hidden = !child;
   form.elements.parent_name.disabled = !child || !editable;
   const panel = form.querySelector(".hosting-panel");
-  panel.hidden = false;
+  // While editing, an identity that can answer neither survey gets no empty panel.
+  panel.hidden = editable && !surveyOpenFor(form, "hosting") && !surveyOpenFor(form, "pickup");
   panel.disabled = !editable;
-  if (form.id === "new-registration-form") {
-    for (const kind of ["hosting", "pickup"]) {
-      for (const radio of panel.querySelectorAll(`[name="${kind}_status"]`)) {
-        radio.required = Boolean(reference.settings[`is_${kind}_open`] && Meals.answersHosting(form.elements.meal_identity.value, kind));
-      }
+  for (const kind of ["hosting", "pickup"]) {
+    const allowed = surveyOpenFor(form, kind);
+    const fields = form.querySelector(kind === "hosting" ? '[id$="registration-hosting"], #detail-hosting' : '[id$="registration-pickup"], #detail-pickup');
+    // Viewing still shows the saved answer; saving a survey staff may not answer stores 否.
+    fields.hidden = editable && !allowed;
+    for (const control of fields.querySelectorAll("input, select")) {
+      control.disabled = !editable || !allowed;
+      // The record view keeps Hosting.render's rule: an existing answer stays required.
+      if (control.type === "radio" && form.id === "new-registration-form") control.required = allowed;
     }
+    // Re-disable the detail dropdowns that the answer hides, which the loop above just enabled.
+    if (editable && allowed) (kind === "hosting" ? Hosting : Pickup).sync(fields);
   }
 }
 // The parent's name to send: trimmed for a child, nothing otherwise; throws when a child has none.
@@ -960,7 +969,8 @@ function registrationFields(parts) {
   const parentName = parentNameFrom(form);
   return {
     full_name: data.get("full_name"), district_id: Number(data.get("district_id")), choices: choicesFromForm(form),
-    hosting: Hosting.read(hosting), pickup: Pickup.read(pickup),
+    hosting: surveyOpenFor(form, "hosting") ? Hosting.read(hosting) : null,
+    pickup: surveyOpenFor(form, "pickup") ? Pickup.read(pickup) : null,
     meal_identity: Meals.readIdentity(form),
     child_type: Meals.childType(form.elements.meal_identity.value), parent_name: parentName ?? undefined,
   };
@@ -987,9 +997,9 @@ function renderNewRegistrationForm() {
   renderChoiceFields(document.querySelector("#new-registration-choices"), choices, true);
   const hosting = document.querySelector("#new-registration-hosting");
   // Required only while the public survey is open, matching the public form.
-  Hosting.render(hosting, Hosting.read(hosting), Boolean(reference.settings.is_hosting_open && Meals.answersHosting(form.elements.meal_identity.value)));
+  Hosting.render(hosting, Hosting.read(hosting), surveyOpenFor(form, "hosting"));
   const pickup = document.querySelector("#new-registration-pickup");
-  Pickup.render(pickup, Pickup.read(pickup), Boolean(reference.settings.is_pickup_open && Meals.answersHosting(form.elements.meal_identity.value, "pickup")));
+  Pickup.render(pickup, Pickup.read(pickup), surveyOpenFor(form, "pickup"));
   syncChildFields(form);
   syncNewMeals();
 }
@@ -1046,7 +1056,7 @@ function openRegistration(registration, editing = false) {
     }
   }
   // The fieldset disables every hosting control, whatever its tag; sync() cannot re-enable them.
-  // View mode disables the controls; identity does not hide staff survey fields.
+  // View mode disables the controls; editing hides surveys staff may not answer.
   syncChildFields(form, editingRegistration);
   // Rendered after the loop above, which disables every button in view mode.
   showParentChildren(registration);

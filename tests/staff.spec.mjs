@@ -514,7 +514,6 @@ test("retrying a failed back-office registration reuses its request id", async (
   await form.locator('[name="meal_identity"]').selectOption("general");
   await form.locator('select[name="district_id"]').selectOption("1");
   await form.locator('input[name="activity_1"][value="true"]').check();
-  await form.locator('input[name="hosting_status"][value="not_hosting"]').check();
   await form.getByRole("button", { name: "建立協助登記" }).click();
   await expect(page.locator("#message")).toHaveText("協助登記失敗，請稍後再試");
   await form.getByRole("button", { name: "建立協助登記" }).click();
@@ -1088,6 +1087,8 @@ test("the note after a password change stays until the user acts on it", async (
 });
 
 const hostedRegistrations = {
+  list_reference: () => ({ json: { settings: { event_name: "測試", is_registration_open: false, is_hosting_open: true, is_pickup_open: true },
+    districts: [{ id: 1, name: "林森", sort_order: 1 }], activities: [{ id: 1, title: "測試聚會", is_published: true, fee_amount: 0 }], program: [] } }),
   list_registrations: () => ({ json: { count: 4, registrations: [
     { id: "223e4567-e89b-42d3-a456-426614174001", serial_no: 4, full_name: "接待弟兄", district_id: 1, record_status: "active", import_status: "imported",
       registration_choices: [{ activity_id: 1, attending: true }], updated_at: "2026-11-05T00:00:00Z",
@@ -1136,7 +1137,7 @@ test("staff edit a hosting answer, and an existing answer cannot be cleared", as
 });
 
 test("a void registration shows its hosting answer with every control disabled", async ({ page }) => {
-  const voided = { list_registrations: () => {
+  const voided = { list_reference: hostedRegistrations.list_reference, list_registrations: () => {
     const result = hostedRegistrations.list_registrations();
     result.json.registrations[0] = { ...result.json.registrations[0], record_status: "void" };
     return result;
@@ -1762,7 +1763,7 @@ test("an unanswered restricted activity stays 未回覆 when staff save an older
 
 test("協助登記 follows the audience and asks the identity for a student-priced meal", async ({ page }) => {
   let created;
-  await mockStaff(page, "staff", () => {}, "測試登記", { ...mealReplies(), create_registration: (payload) => {
+  await mockStaff(page, "staff", () => {}, "測試登記", { ...mealReplies(undefined, { is_hosting_open: true }), create_registration: (payload) => {
     created = payload;
     return { status: 201, json: { serial_no: 5 } };
   } });
@@ -1783,15 +1784,15 @@ test("協助登記 follows the audience and asks the identity for a student-pric
   await identity.selectOption("");
   await form.getByRole("button", { name: "建立協助登記" }).click();
   expect(created).toBeUndefined();
-  // Staff may retain the answer for a student; its public audience exemption remains.
+  // A student is not asked hosting, so staff cannot answer it; the audience exemption keeps the meal.
   await identity.selectOption("student");
-  await expect(form.locator(".hosting-panel")).toBeVisible();
+  await expect(page.locator("#new-registration-hosting")).toBeHidden();
   await expect(lunch.locator('input[value="true"]')).toBeChecked();
   await form.getByRole("button", { name: "建立協助登記" }).click();
   await expect(page.locator("#new-registration-code")).toContainText("已建立流水號 5");
   await expect(page.locator("#message")).toHaveText("協助登記已建立。");
   expect(created.meal_identity).toBe("student");
-  expect(created.hosting.status).toBe("family_registered");
+  expect(created.hosting).toBeNull();
   expect(created.choices).toEqual([{ activity_id: 1, attending: true }, { activity_id: 2, attending: false }, { activity_id: 3, attending: false }]);
 });
 
@@ -2008,18 +2009,18 @@ test("the 兒童 condition lists children only, with 區 and paging, and 清除�
   await expect(child).toHaveValue("");
 });
 
-test("協助登記 for a child permits both surveys and requires the parent's name at the bottom", async ({ page }) => {
+test("協助登記 for a child hides the surveys it cannot answer and requires the parent's name at the bottom", async ({ page }) => {
   const created = [];
   await mockStaff(page, "staff", (payload) => { if (payload.action === "create_registration") created.push(payload); },
     "測試登記", { ...familyReplies, create_registration: () => ({ status: 201, json: { serial_no: 6 } }) });
   await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
-  // Staff may fill either survey for every identity.
-  await expect(form.locator(".hosting-panel")).toBeVisible();
+  // The panel shows only for an identity that can answer at least one survey.
+  await expect(form.locator(".hosting-panel")).toBeHidden();
   await form.getByRole("combobox", { name: "身分別", exact: true }).selectOption("general");
   await expect(form.locator(".hosting-panel")).toBeVisible();
   await form.getByRole("combobox", { name: "身分別", exact: true }).selectOption("child");
-  await expect(form.locator(".hosting-panel")).toBeVisible();
+  await expect(form.locator(".hosting-panel")).toBeHidden();
   await expect(form.locator(".child-hint")).toHaveText("兒童報名請在表單最下方填寫家長姓名。");
   expect(await form.evaluate((element) => [...element.children].filter((item) => item.checkVisibility())
     .slice(-2).map((item) => item.className || item.tagName))).toEqual(["parent-name", "BUTTON"]);
@@ -2038,7 +2039,7 @@ test("協助登記 for a child permits both surveys and requires the parent's na
   expect(created[0]).toMatchObject({ full_name: "王小美", meal_identity: "child", child_type: "elementary", parent_name: "王爸爸", hosting: null, pickup: null });
   // A new registration starts with no identity selected.
   await expect(form.getByRole("combobox", { name: "身分別", exact: true })).toHaveValue("");
-  await expect(form.locator(".hosting-panel")).toBeVisible();
+  await expect(form.locator(".hosting-panel")).toBeHidden();
   await expect(form.locator(".parent-name")).toBeHidden();
 });
 
@@ -2101,8 +2102,11 @@ test("a child's record shows the parent's name read-only and can be changed back
   await expect(form.locator('input[name="parent_name"]')).toBeDisabled();
   await expect(form.locator(".hosting-panel")).toBeVisible();
   await expect(form.locator(".child-hint")).toBeHidden();
+  // Viewing shows the saved answers even though a child is asked neither survey; editing hides the panel.
+  await expect(form.locator("#detail-hosting")).toBeVisible();
 
   await page.getByRole("button", { name: "修改登記資料" }).click();
+  await expect(form.locator(".hosting-panel")).toBeHidden();
   await expect(form.locator('input[name="parent_name"]')).toBeEditable();
   await form.getByRole("combobox", { name: "身分別", exact: true }).selectOption("general");
   await expect(form.locator(".hosting-panel")).toBeVisible();
@@ -2317,7 +2321,7 @@ test("configured badges use custom identities and hide child badges without chan
   await expect(children).toHaveAttribute("data-csv", "3（國小 3）");
 });
 
-test("協助登記 shows the child reminders as a blue block and the surveys for every identity", async ({ page }) => {
+test("協助登記 shows the child reminders as a blue block and the survey panel only for an identity that can answer", async ({ page }) => {
   await mockStaff(page, "staff", () => {}, "測試登記", familyReplies);
   await login(page, "協助登記");
   const form = page.locator("#new-registration-form");
@@ -2330,7 +2334,7 @@ test("協助登記 shows the child reminders as a blue block and the surveys for
   await expect(reminder).toHaveCSS("color", "rgb(29, 79, 134)");
   await identity.selectOption("student");
   await expect(reminder).toBeHidden();
-  await expect(form.locator(".hosting-panel")).toBeVisible();
+  await expect(form.locator(".hosting-panel")).toBeHidden();
   await identity.selectOption("general");
   await expect(form.locator(".hosting-panel")).toBeVisible();
 });

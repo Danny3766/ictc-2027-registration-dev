@@ -499,11 +499,12 @@ begin
     payload:=case kind when 'hosting' then p_hosting else p_pickup end;
     allowed:=public.survey_identity_allowed(kind,identity_code);
     opened:=case kind when 'hosting' then s.is_hosting_open else s.is_pickup_open end;
-    -- Saving a move out of this survey's identities stores 否, on the public page and in the back
-    -- office alike (decided 2026-11-11); whatever the page sent for this survey is ignored.
+    -- Saving a move out of this survey's identities stores 否 (decided 2026-11-11); staff saving a
+    -- survey closed or not open to the identity also stores 否 (decided 2026-11-12). Whatever the
+    -- page sent for this survey is then ignored.
     leaving:=p_request is null and r.meal_identity is distinct from identity_code
       and public.survey_identity_allowed(kind,r.meal_identity) and not allowed;
-    if leaving then
+    if leaving or (p_actor is not null and (not allowed or not opened)) then
       payload:=case kind when 'hosting' then '{"status":"not_hosting"}'::jsonb else '{"status":"no","count":0}'::jsonb end;
     end if;
     if payload='{"reset":true}'::jsonb and p_request is null then

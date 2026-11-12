@@ -15,6 +15,8 @@ begin
   if not coalesce((select is_test_environment from public.site_settings where id), false) then
     raise exception 'TEST_PROJECT_NOT_CONFIRMED';
   end if;
+  -- The fixtures expect only 一般 to answer the surveys; rolled back with everything else.
+  update public.site_settings set hosting_identity_codes=array['general'], pickup_identity_codes=array['general'] where id;
   select auth_user_id into v_admin from public.staff_profiles
   where role = 'admin' and is_active and not must_change_password limit 1;
   select id into v_district from public.districts order by sort_order limit 1;

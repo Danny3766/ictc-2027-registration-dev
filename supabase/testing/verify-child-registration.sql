@@ -23,6 +23,8 @@ begin
   if not coalesce((select is_test_environment from public.site_settings where id), false) then
     raise exception 'TEST_PROJECT_NOT_CONFIRMED';
   end if;
+  -- The fixtures expect only 一般 to answer the surveys; rolled back with everything else.
+  update public.site_settings set hosting_identity_codes=array['general'], pickup_identity_codes=array['general'] where id;
   select auth_user_id into v_admin from public.staff_profiles
   where role = 'admin' and is_active and not must_change_password limit 1;
   select id into v_district from public.districts order by sort_order limit 1;
@@ -166,7 +168,7 @@ begin
   select * into v_row from public.registrations where full_name = v_parent;
   if v_row.is_child or v_row.parent_name is not null then raise exception 'BECOME_ADULT_WRONG'; end if;
 
-  -- 11. Staff: a child created while both surveys are closed, then saved by an older page.
+  -- 11. Staff: a child created while both surveys are closed, then saved by an older page; both stay 否.
   update public.site_settings set is_hosting_open = false, is_pickup_open = false where id;
   select registration_id into v_id from public.staff_create_registration_with_pickup(v_admin, gen_random_uuid(),
     '兒童驗證協助' || v_tag, v_district, v_choices, null, 'child', null, null, v_parent);
@@ -174,8 +176,8 @@ begin
     v_choices, '{"status":"hosting","guest_type":"any","guest_count":2}', null, '{"status":"yes","count":3}');
   select * into v_row from public.registrations where id = v_id;
   if not v_row.is_child or v_row.parent_name is distinct from v_parent or v_row.district_id is distinct from v_other_district
-    or public.registration_hosting_get(v_id)->>'status' is distinct from 'hosting'
-    or public.registration_pickup_get(v_id)->>'status' is distinct from 'yes' then
+    or public.registration_hosting_get(v_id)->>'status' is distinct from 'not_hosting'
+    or public.registration_pickup_get(v_id)->>'status' is distinct from 'no' then
     raise exception 'STAFF_CHILD_WRONG';
   end if;
   begin

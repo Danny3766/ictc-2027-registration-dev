@@ -31,8 +31,9 @@ begin
   assert public.registration_pickup_get(rid)='{"status":"no","count":0}','LEAVING_PICKUP_NOT_NO';
   perform public.staff_update_registration_with_pickup(actor,rid,'Student default fixture',district,choices,
     '{"status":"hosting","guest_type":"any","guest_count":3}','student','{"status":"yes","count":2}');
-  assert public.registration_hosting_get(rid)->>'guest_count'='3','STAFF_NON_TARGET_FAILED';
-  assert not(public.registration_hosting_get(rid)?'answer_valid'),'STAFF_ANSWER_NOT_VALID';
+  -- Staff cannot answer a survey the identity is not asked; it stays a valid 否.
+  assert public.registration_hosting_get(rid)->>'status'='not_hosting','STAFF_NON_TARGET_ANSWERED';
+  assert not(public.registration_hosting_get(rid)?'answer_valid'),'STAFF_NO_NOT_VALID';
 end;
 $$;
 rollback;

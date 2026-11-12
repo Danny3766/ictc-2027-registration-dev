@@ -92,13 +92,13 @@ begin
     if sqlerrm is distinct from 'PICKUP_CLOSED' then raise; end if;
   end;
 
-  -- Staff may answer pickup while it is closed; no answer keeps the stored one.
+  -- Staff cannot answer pickup while it is closed; saving stores 否.
   select registration_id into v_staff_id from public.staff_create_registration_with_pickup(v_admin,
     gen_random_uuid(), v_name || '-staff', v_district, v_choices, '{"status":"not_hosting"}', 'general',
     '{"status":"yes","count":3}');
   if not public.staff_update_registration_with_pickup(v_admin, v_staff_id, v_name || '-staff', v_district,
       v_choices, null, 'general', null)
-    or public.registration_pickup_get(v_staff_id) is distinct from '{"status":"yes","count":3}'::jsonb then
+    or public.registration_pickup_get(v_staff_id) is distinct from '{"status":"no","count":0}'::jsonb then
     raise exception 'staff pickup failed';
   end if;
   if public.staff_update_registration_with_pickup(v_admin, gen_random_uuid(), v_name, v_district,

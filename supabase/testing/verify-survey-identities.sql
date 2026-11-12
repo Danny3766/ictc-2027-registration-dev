@@ -58,12 +58,12 @@ begin
   assert (result->>'success')::boolean and result->'surveys'->'pickup'->>'count'='3','PUBLIC_CANONICAL_RESULT_MISSING';
   assert public.registration_pickup_get(rid)->>'count'='3' and not(public.registration_pickup_get(rid)?'answer_valid'),'CONFIG_RETRY_INVALIDATED_ANSWER';
   assert (select import_status='imported' from public.registrations where id=rid),'CONFIG_RETRY_DIRTIED_IMPORT';
-  -- Staff can answer either survey for any identity while surveys are closed.
+  -- Staff saving while both surveys are closed stores 否 for each, whatever the page sent.
   settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"is_hosting_open":false,"is_pickup_open":false}');
   perform public.staff_update_registration_with_pickup(actor,rid,name,district,choices,
     '{"status":"hosting","guest_type":"any","guest_count":2}','student','{"status":"yes","count":4}');
-  assert public.registration_hosting_get(rid)->>'guest_count'='2','STAFF_HOSTING_NOT_SAVED';
-  assert public.registration_pickup_get(rid)->>'count'='4','STAFF_PICKUP_NOT_SAVED';
+  assert public.registration_hosting_get(rid)->>'status'='not_hosting','STAFF_CLOSED_HOSTING_ANSWERED';
+  assert public.registration_pickup_get(rid)='{"status":"no","count":0}','STAFF_CLOSED_PICKUP_ANSWERED';
   assert (select import_status='reimport_needed' from public.registrations where id=rid),'STAFF_ANSWER_NOT_DIRTY';
   -- A child can answer the configured hosting question independently of pickup.
   settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"is_hosting_open":true,"is_pickup_open":true}');
@@ -119,13 +119,19 @@ begin
     '{"status":"hosting","guest_type":"any","guest_count":5}','student','{"status":"yes","count":2}');
   assert public.registration_hosting_get(rid)->>'status'='not_hosting' and not(public.registration_hosting_get(rid)?'answer_valid'),'STAFF_LEAVING_HOSTING_NOT_NO';
   assert public.registration_pickup_get(rid)='{"status":"no","count":0}','STAFF_LEAVING_PICKUP_NOT_NO';
-  -- Staff may still answer for the student once the identity stays the same.
+  -- Staff cannot answer a survey closed to the selected identity, even if it stays the same.
   perform public.staff_update_registration_with_pickup(actor,rid,name||' child',district,choices,
     '{"status":"hosting","guest_type":"any","guest_count":5}','student','{"status":"yes","count":2}');
-  assert public.registration_hosting_get(rid)->>'status'='hosting','STAFF_SAME_IDENTITY_FORCED_NO';
+  assert public.registration_hosting_get(rid)->>'status'='not_hosting','STAFF_SAME_IDENTITY_NOT_FORCED_NO';
   -- The public page cannot reset a survey its identity cannot answer.
   perform public.update_registration_with_pickup(name||' child',district,choices,'{"reset":true}','student',null);
-  assert public.registration_hosting_get(rid)->>'status'='hosting' and not(public.registration_hosting_get(rid)?'answer_valid'),'NON_TARGET_RESET_ACCEPTED';
+  assert public.registration_hosting_get(rid)->>'status'='not_hosting' and not(public.registration_hosting_get(rid)?'answer_valid'),'NON_TARGET_RESET_ACCEPTED';
+  -- Staff cannot answer a closed survey even for an identity on its list.
+  settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"is_hosting_open":false}');
+  perform public.staff_update_registration_with_pickup(actor,rid,name||' child',district,choices,
+    '{"status":"hosting","guest_type":"any","guest_count":5}','child',null,null,'Parent');
+  assert public.registration_hosting_get(rid)->>'status'='not_hosting','STAFF_CLOSED_SURVEY_ANSWERED';
+  settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"is_hosting_open":true}');
   assert not has_function_privilege('anon','public.save_registration_surveys(uuid,uuid,uuid,text,integer,jsonb,jsonb,text,jsonb,text,text)','EXECUTE'), 'ANON_SAVE_HELPER';
   assert not has_function_privilege('anon','public.update_registration_survey_result(text,integer,jsonb,jsonb,text,jsonb,text,text)','EXECUTE'), 'ANON_PUBLIC_SAVE_RPC';
   update public.site_settings set is_lookup_open=false where id;
