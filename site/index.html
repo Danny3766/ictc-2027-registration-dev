@@ -27,7 +27,7 @@
         <p id="event-note" class="event-note" hidden></p>
       </header>
 
-      <p id="page-message" class="message" role="status" hidden></p>
+      <p id="page-notice" class="message" role="status" hidden></p>
 
       <section
         class="card"
@@ -39,7 +39,9 @@
         <div id="program" class="program-calendar"></div>
       </section>
 
-      <section class="card" aria-label="登記服務">
+      <p id="page-message" class="message" role="status" hidden></p>
+
+      <section class="card" id="registration-service" aria-label="登記服務">
         <div class="tabs" role="tablist" aria-label="登記服務">
           <button type="button" id="register-tab" role="tab" aria-controls="register-panel" aria-selected="true" tabindex="0">登記參加</button>
           <button type="button" id="query-tab" role="tab" aria-controls="query-panel" aria-selected="false" tabindex="-1">查詢或修改登記</button>
@@ -52,6 +54,7 @@
               >姓名<input
                 name="full_name"
                 maxlength="100"
+                pattern=".*\S.*"
                 autocomplete="off"
                 required
             /></label>
@@ -84,7 +87,7 @@
             <p class="reminder">請為每項活動選擇參加或不參加，報名截止前都可以修改登記</p>
             <div id="activities"></div>
           </fieldset>
-          <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required disabled /></label>
+          <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" pattern=".*\S.*" autocomplete="off" required disabled /></label>
           <label class="honeypot" aria-hidden="true"
             >網站<input name="website" tabindex="-1" autocomplete="off"
           /></label>
@@ -95,7 +98,7 @@
         <form id="query-form">
           <p class="hint">請輸入登記時的姓名與區；姓名寫法須與登記時相同，大小寫與空白不影響查詢。</p>
           <div class="identity-fields">
-            <label>姓名<input name="full_name" maxlength="100" autocomplete="off" required /></label>
+            <label>姓名<input name="full_name" maxlength="100" pattern=".*\S.*" autocomplete="off" required /></label>
             <label>區<select name="district_id" required>
                 <option value="">請選擇</option>
               </select></label>
@@ -132,7 +135,7 @@
             <p class="reminder edit-only" hidden>請為每項活動選擇參加或不參加，報名截止前都可以修改登記</p>
             <div id="edit-activities"></div>
           </fieldset>
-          <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" autocomplete="off" required readonly /></label>
+          <label class="parent-name" hidden>家長姓名<input name="parent_name" maxlength="20" pattern=".*\S.*" autocomplete="off" required readonly /></label>
           <div class="actions">
             <button id="start-edit" type="button">修改登記內容</button>
             <button id="save-edit" type="submit" hidden disabled>儲存修改</button>

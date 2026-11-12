@@ -1,5 +1,6 @@
 const config = window.APP_CONFIG;
 const message = document.querySelector("#page-message");
+const notice = document.querySelector("#page-notice");
 const registrationForm = document.querySelector("#registration-form");
 const queryForm = document.querySelector("#query-form");
 const editForm = document.querySelector("#edit-form");
@@ -20,6 +21,7 @@ const surveyChangeCodes = ["HOSTING_CLOSED", "HOSTING_REQUIRED", "PICKUP_CLOSED"
 const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
 const startedAt = Date.now();
 let pageData;
+let validationForm = null;
 // The name and district of the loaded registration; an update sends them back as its lookup key.
 let activeIdentity = null;
 let queriedChoicesBaseline = null;
@@ -46,6 +48,7 @@ function selectTab(tab) {
   const current = tabs.find((item) => item.getAttribute("aria-selected") === "true");
   if (tab !== current && hasUnsavedChanges() && !confirm("確定放棄尚未儲存的修改？")) return false;
   if (tab !== current && editMode) showConfirmation();
+  if (tab !== current) clearValidation();
   for (const item of tabs) {
     const selected = item === tab;
     item.setAttribute("aria-selected", String(selected));
@@ -67,11 +70,60 @@ for (const tab of tabs) {
   });
 }
 
-function showMessage(text, error = false) {
-  message.textContent = text;
-  message.classList.toggle("error", error);
-  message.hidden = false;
-  message.scrollIntoView({ behavior: "smooth", block: "center" });
+function showMessage(text, error = false, position = "form", scroll = true) {
+  const target = position === "notice" ? notice : message;
+  if (position === "result") editForm.before(message);
+  else if (position === "form") document.querySelector("#registration-service").before(message);
+  target.textContent = text;
+  target.classList.toggle("error", error);
+  target.hidden = false;
+  if (scroll) target.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function fieldName(control) {
+  if (control.name.startsWith("activity_")) return control.closest(".activity")?.querySelector("strong")?.textContent ?? "活動選擇";
+  return {
+    full_name: "姓名", district_id: "區", meal_identity: "身分別", parent_name: "家長姓名",
+    hosting_status: "是否可以開家接待", guest_count: "可以接待幾位", guest_type: "接待對象",
+    pickup_status: "是否可以接機", pickup_count: "可以接機幾位",
+  }[control.name] ?? control.name;
+}
+
+function clearValidation() {
+  for (const form of [registrationForm, queryForm, editForm]) {
+    form.querySelectorAll(".field-invalid").forEach((field) => field.classList.remove("field-invalid"));
+    form.querySelectorAll('[aria-invalid="true"]').forEach((field) => field.removeAttribute("aria-invalid"));
+  }
+  if (validationForm) message.hidden = true;
+  validationForm = null;
+}
+
+function updateValidation(form, focus = false, scroll = true) {
+  const invalid = Array.from(form.querySelectorAll("input, select, textarea"))
+    .filter((control) => control.willValidate && !control.validity.valid);
+  clearValidation();
+  if (!invalid.length) return;
+  validationForm = form;
+  for (const control of invalid) {
+    control.setAttribute("aria-invalid", "true");
+    (control.type === "radio" ? control.closest(".activity, .hosting-options") : control.closest("label"))
+      ?.classList.add("field-invalid");
+  }
+  showMessage(`請補填以下欄位：${[...new Set(invalid.map(fieldName))].join("、")}`, true, "form", scroll);
+  if (focus) invalid[0].focus({ preventScroll: true });
+}
+
+for (const form of [registrationForm, queryForm, editForm]) {
+  let pending = false;
+  form.addEventListener("invalid", (event) => {
+    event.preventDefault();
+    if (pending) return;
+    pending = true;
+    queueMicrotask(() => {
+      pending = false;
+      updateValidation(form, true);
+    });
+  }, true);
 }
 
 async function api(body) {
@@ -312,7 +364,7 @@ function hasUnsavedChanges() {
 }
 
 function updateSaveState() {
-  saveEditButton.disabled = !editForm.checkValidity() || !hasUnsavedChanges();
+  saveEditButton.disabled = !hasUnsavedChanges();
 }
 
 // The hosting description: on the registration form while hosting is open, and in the lookup only
@@ -416,6 +468,7 @@ function showHostingSummary() {
 
 function showConfirmation() {
   editMode = false;
+  clearValidation();
   editSurveyReset.clear();
   for (const container of [editHosting,editPickup]) delete container.dataset.editable;
   editActivities.innerHTML = activitySummaryFields(pageData.activities, choicesMap(queriedChoicesBaseline ?? []));
@@ -502,12 +555,12 @@ async function loadPage() {
     const pastDeadline = Boolean(deadline) && new Date(deadline) <= new Date();
     if (!pageData.settings.is_registration_open || pastDeadline || pageData.activities.length === 0) {
       registrationForm.querySelector("button[type=submit]").disabled = true;
-      showMessage(pastDeadline ? "登記已截止。" : "登記目前尚未開放。", true);
+      showMessage(pastDeadline ? "登記已截止。" : "登記目前尚未開放。", true, "notice");
     }
   } catch (error) {
     registrationForm.hidden = true;
     queryForm.hidden = true;
-    showMessage(error.message, true);
+    showMessage(error.message, true, "notice");
   }
 }
 
@@ -594,7 +647,7 @@ queryForm.addEventListener("submit", async (event) => {
     showConfirmation();
     showMessage(registration.can_change
       ? "以下為目前登記內容。"
-      : "目前只能查看，無法修改登記內容。");
+      : "目前只能查看，無法修改登記內容。", false, "result");
   } catch (error) {
     editForm.hidden = true;
     showMessage(error.message, true);
@@ -614,7 +667,7 @@ editForm.addEventListener("submit", async (event) => {
   if (choices.some((choice) => choice.attending === null)) return showMessage("請回答每一項活動", true);
   const child = currentEditChild();
   if (child.child_type && !child.parent_name) return showMessage("請填寫家長姓名", true);
-  if (!editForm.reportValidity() || !hasUnsavedChanges()) return;
+  if (!hasUnsavedChanges()) return;
   const hosting = currentEditHosting();
   const pickup = currentEditPickup();
   const mealIdentity = currentEditIdentity();
@@ -634,7 +687,7 @@ editForm.addEventListener("submit", async (event) => {
     queriedChildBaseline = child;
     queriedIdentityBaseline = mealIdentity;
     showConfirmation();
-    showMessage("修改已儲存，以下為目前登記內容。");
+    showMessage("修改已儲存，以下為目前登記內容。", false, "result");
   } catch (error) {
     if (surveyChangeCodes.includes(error.code)) return applyHostingChange(error);
     if (error.status === 409 || error.message === "查詢功能暫停中，請稍後再試") {
@@ -662,10 +715,15 @@ editForm.addEventListener("input", () => {
   syncMeals();
   updateSaveState();
 });
+for (const form of [registrationForm, queryForm, editForm]) {
+  form.addEventListener("input", () => {
+    if (validationForm === form) updateValidation(form, false, false);
+  });
+}
 cancelEditButton.addEventListener("click", () => {
   if (hasUnsavedChanges() && !confirm("確定放棄尚未儲存的修改？")) return;
   showConfirmation();
-  showMessage("以下為目前登記內容。");
+  showMessage("以下為目前登記內容。", false, "result");
 });
 
 // A page brought back whole from the back/forward cache keeps typed text, which autocomplete="off"

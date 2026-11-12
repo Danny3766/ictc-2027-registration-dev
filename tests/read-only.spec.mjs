@@ -34,6 +34,71 @@ async function query(page, name = "測試登記", district = "1") {
   await page.getByRole("button", { name: "查詢" }).click();
 }
 
+test("missing fields are listed between the schedule and forms and clear as they are filled", async ({ page }) => {
+  const requests = [];
+  await page.route("**/functions/v1/registration", (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { ...openPage(), program: [
+      { event_date: "2027-02-20", start_time: "12:30:00", end_time: "14:00:00", title: "聚會" },
+    ] } });
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 404, json: { error: "查無登記資料，請確認姓名寫法與區和登記時相同" } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "送出登記" }).click();
+  await expect(page.locator("#page-message")).toContainText("姓名、區、身分別、測試活動");
+  await expect(page.locator("#page-message")).toBeVisible();
+  expect(await page.locator("#page-message").evaluate((element) => [
+    element.previousElementSibling.id, element.nextElementSibling.id,
+  ])).toEqual(["program-section", "registration-service"]);
+  await expect(page.locator('#registration-form select[name="district_id"]')).toHaveAttribute("aria-invalid", "true");
+  await expect(page.locator('#registration-form select[name="district_id"]')).toHaveCSS("border-top-color", "rgb(165, 40, 40)");
+  expect(requests).toHaveLength(0);
+
+  await page.getByRole("tab", { name: "查詢或修改登記" }).click();
+  await expect(page.locator("#page-message")).toBeHidden();
+  await page.getByRole("button", { name: "查詢", exact: true }).click();
+  await expect(page.locator("#page-message")).toHaveText("請補填以下欄位：姓名、區");
+  await page.locator('#query-form input[name="full_name"]').fill("查不到的人");
+  await expect(page.locator("#page-message")).toHaveText("請補填以下欄位：區");
+  await expect(page.locator('#query-form input[name="full_name"]')).not.toHaveAttribute("aria-invalid", "true");
+  await page.locator('#query-form select[name="district_id"]').selectOption("1");
+  await expect(page.locator("#page-message")).toBeHidden();
+  await page.getByRole("button", { name: "查詢", exact: true }).click();
+  await expect(page.locator("#page-message")).toHaveText("查無登記資料，請確認姓名寫法與區和登記時相同");
+  expect(requests).toHaveLength(1);
+});
+
+test("announcements stay above the schedule while query and edit results appear above registration details", async ({ page }) => {
+  await page.route("**/functions/v1/registration", (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: { ...openPage(false), program: [
+      { event_date: "2027-02-20", start_time: "12:30:00", end_time: "14:00:00", title: "聚會" },
+    ] } });
+    if (route.request().postDataJSON().action === "query") return route.fulfill({ json: queried(true) });
+    return route.fulfill({ json: { success: true } });
+  });
+  await page.goto("/");
+  await expect(page.locator("#page-notice")).toHaveText("登記目前尚未開放。");
+  await query(page);
+  await expect(page.locator("#page-notice")).toBeVisible();
+  await expect(page.locator("#page-message")).toHaveText("以下為目前登記內容。");
+  await expect(page.locator("#query-panel > #page-message + #edit-form")).toBeVisible();
+  await page.getByRole("button", { name: "修改登記內容" }).click();
+  await page.locator('#edit-form select[name="meal_identity"]').selectOption("");
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  await expect(page.locator("#page-message")).toHaveText("請補填以下欄位：身分別");
+  await expect(page.locator('#edit-form select[name="meal_identity"]')).toHaveAttribute("aria-invalid", "true");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "取消修改" }).click();
+  await expect(page.locator("#page-message")).toHaveText("以下為目前登記內容。");
+  await expect(page.locator("#edit-form .field-invalid, #edit-form [aria-invalid]")).toHaveCount(0);
+  await page.getByRole("button", { name: "修改登記內容" }).click();
+  await page.locator('#edit-form select[name="meal_identity"]').selectOption("general");
+  await page.locator('#edit-form input[name="activity_1"][value="false"]').check();
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
+  await expect(page.locator("#query-panel > #page-message + #edit-form")).toBeVisible();
+});
+
 test("returning to the page starts both name fields empty, so a shared device does not show the previous name", async ({ page }) => {
   await page.route("**/functions/v1/registration", (route) => route.fulfill({ json: openPage() }));
   await page.goto("/");
@@ -140,12 +205,12 @@ test("a passed deadline closes the form even while registration is switched on",
 
   await page.goto("/");
   await expect(page.locator('#registration-form button[type="submit"]')).toBeDisabled();
-  await expect(page.locator("#page-message")).toHaveText("登記已截止。");
+  await expect(page.locator("#page-notice")).toHaveText("登記已截止。");
 
   deadline = future;
   await page.reload();
   await expect(page.locator('#registration-form button[type="submit"]')).toBeEnabled();
-  await expect(page.locator("#page-message")).not.toHaveText("登記已截止。");
+  await expect(page.locator("#page-notice")).not.toHaveText("登記已截止。");
 });
 
 test("a query that finds nothing shows the server message", async ({ page }) => {
@@ -681,7 +746,9 @@ test("hosting opened during an edit asks for the answer and keeps the activity e
   await expect(notAttending).toBeChecked();
   const hosting = page.locator("#edit-hosting-section");
   await expect(hosting).toBeVisible();
-  await expect(page.getByRole("button", { name: "儲存修改" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "儲存修改" })).toBeEnabled();
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  await expect(page.locator("#page-message")).toContainText("是否可以開家接待");
   await hosting.getByLabel("家人已登記開家接待").check();
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
@@ -1203,7 +1270,7 @@ test("a child skips both surveys, may join a hosting-only activity, and must giv
   expect(await registrationFormValid(page)).toBe(false);
   await parent.fill("   ");
   await page.getByRole("button", { name: "送出登記" }).click();
-  await expect(page.locator("#page-message")).toHaveText("請填寫家長姓名");
+  await expect(page.locator("#page-message")).toHaveText("請補填以下欄位：家長姓名");
   expect(requests).toHaveLength(0);
   await expect(parent).toHaveAttribute("maxlength", "20");
 
@@ -1317,11 +1384,11 @@ test("an adult becoming a child must give the parent's name before saving", asyn
   await expect(page.locator("#edit-hosting")).toContainText("開家接待：否");
   await expect(page.locator("#edit-hosting")).toContainText("此身分不需回答，儲存後為「否」");
   await expect(edit.locator(".parent-name")).toBeVisible();
-  // An empty required name leaves 儲存修改 disabled; spaces alone pass the browser check but not ours.
-  await expect(page.getByRole("button", { name: "儲存修改" })).toBeDisabled();
+  // Keep the save button available so missing required fields can be explained on click.
+  await expect(page.getByRole("button", { name: "儲存修改" })).toBeEnabled();
   await edit.locator('input[name="parent_name"]').fill("  ");
   await page.getByRole("button", { name: "儲存修改" }).click();
-  await expect(page.locator("#page-message")).toHaveText("請填寫家長姓名");
+  await expect(page.locator("#page-message")).toHaveText("請補填以下欄位：家長姓名");
   expect(requests.filter((body) => body.action === "update")).toHaveLength(0);
   await edit.locator('input[name="parent_name"]').fill("王爸爸");
   await page.getByRole("button", { name: "儲存修改" }).click();

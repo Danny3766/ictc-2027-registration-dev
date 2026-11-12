@@ -19,6 +19,10 @@ h1, h2 { line-height: 1.25; }
 .notice, .message { padding: .75rem 1rem; border-radius: .6rem; background: #fff4d8; }
 .test-banner { margin: 0; padding: .5rem 1rem; color: #654c00; background: #fff4d8; font-weight: 700; text-align: center; }
 .message.error { color: #842525; background: #ffe9e9; }
+.field-invalid { color: #842525; font-weight: 700; }
+.field-invalid input:not([type="radio"]), .field-invalid select { border: 2px solid #a52828; }
+.field-invalid input[type="radio"] { accent-color: #a52828; }
+.hosting-question:has(+ .hosting-options.field-invalid) { color: #842525; font-weight: 700; }
 .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; border-bottom: 1px solid #d8e1dc; padding-bottom: .75rem; }
 .tabs button { margin: 0; min-width: 0; background: #fff; color: #23624b; border-color: transparent; }
 .tabs button[aria-selected="true"] { background: #23624b; color: #fff; }

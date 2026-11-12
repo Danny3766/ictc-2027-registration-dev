@@ -63,7 +63,8 @@ test("leaving and returning clears only the affected answer and cancel restores 
   await identity.selectOption("student"); await identity.selectOption("general");
   await expect(page.locator('#edit-hosting [name="hosting_status"]:checked')).toHaveCount(0);
   await expect(page.locator('#edit-pickup [name="pickup_status"][value="yes"]')).toBeChecked();
-  await expect(page.locator("#save-edit")).toBeDisabled();
+  await page.locator("#save-edit").click();
+  await expect(page.locator("#page-message")).toContainText("是否可以開家接待");
   await page.locator("#cancel-edit").click();
   await expect(page.locator("#edit-hosting")).toContainText("2 位");
   expect(writes).toHaveLength(0);
