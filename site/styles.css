@@ -42,12 +42,16 @@ div.reminder:not(:has(> :not([hidden]))) { display: none; }
 .result-frame { margin-top: 1.25rem; padding: 1rem; border: 2px solid #23624b; border-radius: .75rem; }
 .result-title { margin: 0 0 .5rem; color: #23624b; font-size: 1.1rem; }
 input[readonly] { background: #eef3f0; }
+#query-form :is(input, select):disabled { color: #59655f; background: #eef3f0; opacity: 1; }
 input, select, textarea, button { width: 100%; min-height: 2.75rem; margin-top: .35rem; padding: .65rem .75rem; border: 1px solid #9caaa3; border-radius: .5rem; font: inherit; }
 button, .button-link { border-color: #23624b; color: #fff; background: #23624b; font-weight: 700; cursor: pointer; }
 button:disabled { opacity: .55; cursor: wait; }
+#query-form:has(input:disabled) button { cursor: not-allowed; }
 .secondary { color: #23624b; background: #fff; }
 fieldset { padding: 0; border: 0; }
 .activity { padding: 1rem 0; border-bottom: 1px solid #e5ebe8; }
+/* Frame drawn inside the widened box so adjacent missing activities never overlap; text stays put. */
+.activity.field-invalid { margin-inline: -.75rem; padding-inline: .75rem; color: inherit; font-weight: inherit; outline: 3px solid #a52828; outline-offset: -3px; border-radius: .5rem; }
 .program-calendar { display: grid; gap: 1rem; }
 .program-day { border: 1px solid #d8e1dc; border-radius: .75rem; overflow: hidden; }
 .program-day h3 { margin: 0; padding: .7rem 1rem; color: #fff; background: #23624b; font-size: 1rem; }

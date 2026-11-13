@@ -468,6 +468,7 @@ function showHostingSummary() {
 
 function showConfirmation() {
   editMode = false;
+  setQueryLocked(false);
   clearValidation();
   editSurveyReset.clear();
   for (const container of [editHosting,editPickup]) delete container.dataset.editable;
@@ -485,6 +486,7 @@ function showConfirmation() {
 function beginEditing() {
   if (!queriedCanChange || !queriedChoicesBaseline) return;
   editMode = true;
+  setQueryLocked(true);
   showEditChild();
   editActivities.innerHTML = activityFields(pageData.activities, choicesMap(queriedChoicesBaseline), false);
   Meals.render(editActivities, pageData.activities);
@@ -504,6 +506,10 @@ function beginEditing() {
 
 function districtName(id) {
   return pageData.districts.find((district) => String(district.id) === String(id))?.name ?? "";
+}
+
+function setQueryLocked(locked) {
+  for (const control of queryForm.elements) control.disabled = locked;
 }
 
 function setBusy(form, busy) {
@@ -616,7 +622,6 @@ registrationForm.addEventListener("submit", async (event) => {
 
 queryForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (hasUnsavedChanges() && !confirm("確定放棄尚未儲存的修改？")) return;
   setBusy(queryForm, true);
   editForm.hidden = true;
   activeIdentity = null;
