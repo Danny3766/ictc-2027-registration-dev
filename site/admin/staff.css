@@ -36,9 +36,23 @@ textarea { width: 100%; min-height: 6rem; padding: .65rem .75rem; border: 1px so
 .staff-form legend { margin-bottom: .25rem; font-weight: 600; }
 .inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; max-width: 40rem; }
 .inline-form > button { margin-top: 0; }
+#student-statistics-identity-form { margin-bottom: 1.5rem; }
 #search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) minmax(0, 13rem) auto auto; max-width: 56rem; }
 /* A select renders a little shorter than an input; filling the row keeps both labels and boxes level. */
-#search-form label { align-self: stretch; grid-template-rows: auto 1fr; }
+#search-form > label, .identity-filter { align-self: stretch; grid-template-rows: auto 1fr; }
+/* The 身分別 multi-select: a box styled like the other selects that opens a checklist over the rows below. */
+.identity-filter { display: grid; gap: .3rem; position: relative; min-width: 0; }
+.identity-filter details { min-width: 0; }
+.identity-filter summary { display: block; min-height: 2.75rem; margin-top: .35rem; padding: .65rem 2rem .65rem .75rem;
+  border: 1px solid #9caaa3; border-radius: .5rem; background: #fff; cursor: pointer; list-style: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; position: relative; }
+.identity-filter summary::-webkit-details-marker { display: none; }
+.identity-filter summary::after { content: "▾"; position: absolute; right: .75rem; }
+.identity-filter-menu { position: absolute; z-index: 20; left: 0; min-width: 100%; max-height: 20rem; overflow-y: auto;
+  margin-top: .25rem; padding: .35rem 0; border: 1px solid #9caaa3; border-radius: .5rem; background: #fff; box-shadow: 0 4px 12px rgb(0 0 0 / .12); }
+.identity-filter-menu label.check { display: flex; padding: .45rem .75rem; white-space: nowrap; cursor: pointer; }
+.identity-filter-menu label.check:hover { background: #eef3f0; }
+.identity-filter-menu label.check:first-child { border-bottom: 1px solid #e5ebe8; }
 .staff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .staff-actions button { margin-top: 0; }
 .pager { justify-content: center; }
@@ -130,9 +144,12 @@ main.wide .compact-form { max-width: none; }
 /* The four summary cards: two a row on wide screens, one on phones; their short cells stay on one line. */
 .summary-stat-cards { grid-template-columns: minmax(0, 1fr); align-items: stretch; }
 .summary-stat-cards :is(th, td) { white-space: nowrap; }
+/* 各區 has five columns: on phones its cells wrap instead of scrolling sideways. */
+.summary-stat-cards table:has(#district-stats-rows) :is(th, td) { white-space: normal; }
 /* 各區各活動: three cards a row on wide screens, so 全會所 and four districts read as 3 + 2; phones keep one a row. */
 @media (min-width: 56rem) {
   .summary-stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .summary-stat-cards table:has(#district-stats-rows) :is(th, td) { white-space: nowrap; }
   #district-activity-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 tr.total td { border-top: 2px solid #c9d4ce; background: #f6f9f7; font-weight: 700; }
@@ -207,7 +224,10 @@ tr.dragging .drag-handle { cursor: grabbing; }
   .inline-form { grid-template-columns: 1fr; }
   /* Fields stack; 搜尋 and 清除條件 share the last row. */
   #search-form { grid-template-columns: 1fr 1fr; }
-  #search-form label { grid-column: 1 / -1; }
+  #search-form > label, .identity-filter { grid-column: 1 / -1; }
+  /* On phones the list opens in place and pushes 搜尋 down, so it never covers the buttons. */
+  .identity-filter-menu { position: static; }
+  .identity-filter-menu label.check { white-space: normal; }
   .staff-nav { position: static; }
   th, td { padding: .45rem .4rem; }
   /* The update time column is the least useful on a phone; hiding it keeps name and action visible. */

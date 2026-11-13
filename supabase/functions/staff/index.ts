@@ -255,8 +255,12 @@ export async function handler(request) {
       return response({ error: "INVALID_REQUEST" }, 400);
     }
     if (!validDistrictFilter(body.district_id)) return response({ error: "INVALID_REQUEST" }, 400);
-    // The 兒童 filter: left out lists everyone, true lists children only; one child type is a meal_identity filter.
-    if (body.children_only !== undefined && body.children_only !== true) return response({ error: "INVALID_REQUEST" }, 400);
+    // The 身分別 filter: left out lists everyone; otherwise identity codes, null meaning 未填身分.
+    const identities = body.meal_identities;
+    // A page loaded before the change still sends the old filters; ignoring them would show an unfiltered list as filtered.
+    if (body.meal_identity !== undefined || body.children_only !== undefined) return response({ error: "INVALID_REQUEST" }, 400);
+    if (identities !== undefined && (!Array.isArray(identities) || identities.length === 0 || identities.length > 100
+      || !identities.every(validMealIdentity))) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
       .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,meal_identity,is_child,child_type,parent_name,name_key"
         + (beforeSerial !== null || !body.summary ? ",registration_choices(activity_id,attending),registration_hosting(status,guest_type,guest_count,answer_valid),registration_pickup(status,count,answer_valid)" : ""),
@@ -272,9 +276,13 @@ export async function handler(request) {
         : query.ilike("name_key", `%${nameKey(body.search).replaceAll(/[%*,()]/g, "").replaceAll(/[\\_]/g, "\\$&")}%`);
     }
     if (body.district_id != null) query = query.eq("district_id", body.district_id);
-    if (body.meal_identity != null && !validMealIdentity(body.meal_identity)) return response({ error: "INVALID_REQUEST" }, 400);
-    if (body.meal_identity) query = query.eq("meal_identity", body.meal_identity);
-    if (body.children_only) query = query.eq("is_child", true);
+    if (identities) {
+      const codes = identities.filter((code) => code !== null);
+      // validMealIdentity limits codes to [a-z0-9_-], so they are safe inside the or() filter text.
+      query = !identities.includes(null) ? query.in("meal_identity", codes)
+        : codes.length ? query.or(`meal_identity.is.null,meal_identity.in.(${codes.join(",")})`)
+        : query.is("meal_identity", null);
+    }
     const { data, count, error } = await query;
     if (error) {
       console.error("Failed to list registrations", error);
@@ -293,7 +301,7 @@ export async function handler(request) {
 
   if (body.action === "list_reference" || body.action === "me" && body.include_reference) {
     const [settings, districts, activities, program, identities, usedIdentities] = await Promise.all([
-      database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_lookup_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description,hosting_identity_codes,pickup_identity_codes").single(),
+      database.from("site_settings").select("event_name,venue,address,event_note,registration_deadline_at,is_registration_open,is_lookup_open,is_hosting_open,hosting_description,is_pickup_open,pickup_description,hosting_identity_codes,pickup_identity_codes,student_statistics_identity_code").single(),
       database.from("districts").select("id,name,sort_order").order("sort_order"),
       database.from("activities").select("id,category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,venue,address,map_url,description,fee_amount,student_fee_amount,activity_identity_prices(identity_code,fee_amount),cost_amount,audience,audience_note,is_published,affects_conference_import,sort_order").order("sort_order"),
       database.from("program_items").select("id,event_date,start_time,end_time,title,note,sort_order,is_visible").order("sort_order"),
@@ -418,7 +426,7 @@ export async function handler(request) {
 
   if (body.action === "save_reference") {
     // Districts are fixed: renaming one would break the name + district lookup of existing registrations.
-    if (!["settings", "hosting", "activity", "program", "identity", "delete_identity"].includes(body.kind)
+    if (!["settings", "hosting", "activity", "program", "identity", "delete_identity", "student_statistics_identity"].includes(body.kind)
       || !body.data || typeof body.data !== "object" || Array.isArray(body.data)) {
       return response({ error: "INVALID_REQUEST" }, 400);
     }
@@ -429,6 +437,12 @@ export async function handler(request) {
       if (lostAccess(error)) return lostAccessResponse();
       if (error.message?.includes("IDENTITY_IN_SURVEY_TARGETS")) {
         return response({ error: "此身分已設為接待調查可填身分，請先在開家與接機接待設定取消勾選" }, 400);
+      }
+      if (error.message?.includes("IDENTITY_IN_STUDENT_STATISTICS")) {
+        return response({ error: "此身分已設為學生統計身分，請先改選或清除指定" }, 400);
+      }
+      if (error.message?.includes("INVALID_STUDENT_STATISTICS_IDENTITY")) {
+        return response({ error: "請選擇啟用中的非保留身分" }, 400);
       }
       // 23503: a registration took the identity between the check and the delete.
       if (error.message?.includes("IDENTITY_IN_USE") || (body.kind === "delete_identity" && error.code === "23503")) {

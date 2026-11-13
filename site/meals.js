@@ -157,19 +157,22 @@ const Meals = (() => {
     }
     select.value = current || "";
   }
-  // The list's 身分別 filter: fixed order first, then custom ones; a stopped identity only while registrations use it.
-  function renderIdentityFilter(select, usedCodes = []) {
-    const current = select.value;
-    select.replaceChildren(new Option("全部身分", ""));
-    const add = (code) => {
-      const item = identities.find((item) => item.code === code);
-      if (item && (item.is_active || usedCodes.includes(code))) select.add(new Option(item.name + (item.is_active ? "" : "（已停用）"), code));
+  // The list's 身分別 checklist in 身分別 order: a stopped identity only while registrations use it, then 未填身分 ("").
+  // Every box defaults to checked so form.reset() means 全部身分; a redraw keeps what was unchecked.
+  function renderIdentityFilter(menu, usedCodes = []) {
+    const unchecked = new Set([...menu.querySelectorAll('[name="identity_filter"]')].filter((box) => !box.checked).map((box) => box.value));
+    const check = (name, value, text) => {
+      const box = Object.assign(document.createElement("input"), { type: "checkbox", name, value, defaultChecked: true });
+      box.checked = !unchecked.has(value);
+      const label = document.createElement("label");
+      label.className = "check";
+      label.append(box, text);
+      return label;
     };
-    add("general"); add("student");
-    select.add(new Option("全部兒童", "all_children"));
-    add("child"); add("preschool");
-    for (const item of identities) if (!["general", "student", "child", "preschool"].includes(item.code)) add(item.code);
-    select.value = current;
+    menu.replaceChildren(check("identity_all", "", "全部身分"),
+      ...identities.filter((item) => item.is_active || usedCodes.includes(item.code))
+        .map((item) => check("identity_filter", item.code, item.name + (item.is_active ? "" : "（已停用）"))),
+      check("identity_filter", "", "未填身分"));
   }
 
   const taipeiDateTime = (value) => {
@@ -208,7 +211,7 @@ const Meals = (() => {
   const revertedCount = (container) => container.querySelectorAll("input[data-reverted]").length;
 
   return {
-    configure, identityLabels, childType, answersHosting, renderIdentity, renderIdentityFilter, hasStudentPrice, eligible, fee, addFees, needsIdentity, priceText, feeText, mapUrl, activityTime,
+    configure, identityLabels, childType, answersHosting, renderIdentity, renderIdentityFilter, eligible, fee, addFees, needsIdentity, priceText, feeText, mapUrl, activityTime,
     render, sync, choices, readIdentity, revertedCount,
   };
 })();

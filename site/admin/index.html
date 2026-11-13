@@ -58,7 +58,11 @@
           <form id="search-form" class="staff-search inline-form">
             <label>姓名或流水號<input name="search" maxlength="100" /></label>
             <label>區<select name="district_id"><option value="">全部區</option></select></label>
-            <label>身分別<select name="identity_filter"><option value="">全部身分</option></select></label>
+            <div class="identity-filter"><span id="identity-filter-title">身分別</span>
+              <details><summary aria-describedby="identity-filter-title">全部身分</summary>
+                <div class="identity-filter-menu" role="group" aria-labelledby="identity-filter-title"></div>
+              </details>
+            </div>
             <button type="submit">搜尋</button>
             <button id="clear-search" type="button" class="secondary" disabled>清除條件</button>
           </form>
@@ -143,13 +147,14 @@
           <h2>統計與匯出</h2>
           <p>依目前公開活動與有效登記計算。</p>
           <div class="staff-actions"><button id="refresh-stats" type="button">更新統計</button><button id="download-csv" type="button" class="secondary">下載報名登記 CSV</button><button id="download-stats-csv" type="button" class="secondary">下載統計 CSV</button></div>
+          <p id="student-statistics-hint" class="field-hint" hidden>請先到身分別設定選擇學生統計身分</p>
           <p id="stats-summary"></p>
           <h3>各活動</h3>
           <div class="table-scroll"><table class="numeric"><thead><tr><th>活動</th><th>參加</th><th>其中學生</th><th>其中兒童</th><th>不參加</th><th>未回覆</th><th>預估費用</th><th>預估成本</th><th>預估補貼</th></tr></thead><tbody id="stats-rows"></tbody></table></div>
           <div class="stat-cards summary-stat-cards">
             <section class="mini-card">
               <h3>各區</h3>
-              <div class="table-scroll"><table class="numeric"><thead><tr><th>區</th><th>有效登記</th><th>其中兒童</th><th>預估費用</th></tr></thead><tbody id="district-stats-rows"></tbody></table></div>
+              <div class="table-scroll"><table class="numeric"><thead><tr><th>區</th><th>有效登記</th><th>其中學生</th><th>其中兒童</th><th>預估費用</th></tr></thead><tbody id="district-stats-rows"></tbody></table></div>
             </section>
             <section class="mini-card">
               <h3>接待對象</h3>
@@ -249,6 +254,10 @@
 
         <section id="admin-identities" class="card" data-view="admin-identities" hidden>
           <h2>身分別</h2>
+          <form id="student-statistics-identity-form" class="staff-form inline-form">
+            <label>學生統計身分<select name="code"><option value="">未指定</option></select></label>
+            <button type="submit">儲存學生統計身分</button>
+          </form>
           <form id="identity-form" class="staff-form compact-form">
             <input name="code" type="hidden" />
             <div class="field-row">
