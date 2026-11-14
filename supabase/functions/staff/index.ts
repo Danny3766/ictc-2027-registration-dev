@@ -442,7 +442,7 @@ export async function handler(request) {
         return response({ error: "此身分已設為學生統計身分，請先改選或清除指定" }, 400);
       }
       if (error.message?.includes("INVALID_STUDENT_STATISTICS_IDENTITY")) {
-        return response({ error: "請選擇啟用中的非保留身分" }, 400);
+        return response({ error: "請選擇啟用中、不是一般或兒童的身分" }, 400);
       }
       // 23503: a registration took the identity between the check and the delete.
       if (error.message?.includes("IDENTITY_IN_USE") || (body.kind === "delete_identity" && error.code === "23503")) {

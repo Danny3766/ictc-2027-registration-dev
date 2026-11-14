@@ -8,7 +8,8 @@
 --   * activity_identity_prices: a price per activity and identity; a missing one is unset (the general
 --     price is activities.fee_amount; 202611090003 lets each be set alone). The student prices move here; the staff page still sends student_fee_amount with the
 --     student price, so the column stays in step for older readers.
---   * Every registration stores an identity from now on: children become child, an unanswered one general.
+--   * Every save stores an identity from now on. Existing children become child; a registration
+--     without one keeps it empty, since the older page never asked.
 begin;
 
 create table public.registration_identities (
@@ -38,8 +39,7 @@ revoke all on public.registration_identities, public.activity_identity_prices fr
 grant all on public.registration_identities, public.activity_identity_prices to service_role;
 
 alter table public.registrations drop constraint registrations_meal_identity;
-update public.registrations
-set meal_identity = case when is_child then 'child' else coalesce(meal_identity, 'general') end;
+update public.registrations set meal_identity = 'child' where is_child;
 alter table public.registrations add constraint registrations_meal_identity_fk
   foreign key (meal_identity) references public.registration_identities (code);
 

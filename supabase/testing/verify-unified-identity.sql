@@ -31,9 +31,12 @@ begin
   if v_row.meal_identity <> 'student' or v_row.child_type is not null or v_row.parent_name is not null then
     raise exception 'ADULT_NOT_RESTORED';
   end if;
-  update public.registration_identities set is_active=false where code='student';
-  perform public.update_registration_with_pickup(v_row.full_name,v_district,v_choices,null,'student');
-  if not exists(select 1 from public.registration_used_identity_codes() code where code='student') then
+  -- 學生 is reserved and cannot be deactivated (202611140001), so a custom identity stands in.
+  insert into public.registration_identities(code,name) values ('verify_inactive','Verify inactive');
+  perform public.update_registration_with_pickup(v_row.full_name,v_district,v_choices,null,'verify_inactive');
+  update public.registration_identities set is_active=false where code='verify_inactive';
+  perform public.update_registration_with_pickup(v_row.full_name,v_district,v_choices,null,'verify_inactive');
+  if not exists(select 1 from public.registration_used_identity_codes() code where code='verify_inactive') then
     raise exception 'USED_INACTIVE_IDENTITY_MISSING';
   end if;
   select registration_id,serial_no into v_id,v_serial from public.staff_create_registration_with_pickup(

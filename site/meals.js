@@ -156,13 +156,13 @@ const Meals = (() => {
   // The two target lists are independent; older reference responses retain the general-only default.
   const answersHosting = (identity, kind = "hosting") => (surveySettings[`${kind}_identity_codes`] ?? ["general"]).includes(identity);
   // 身分別 options: new picks follow selectable(); the stored identity stays even when stopped or staff-only.
-  function renderIdentity(select, stored = null) {
-    const current = stored ?? select.value;
+  // Left out keeps the current pick; null is a registration without an identity, so nothing is picked.
+  function renderIdentity(select, stored = select.value) {
     select.replaceChildren(new Option("請選擇", ""));
-    for (const item of identities.filter((item) => item.code === current || selectable(item))) {
+    for (const item of identities.filter((item) => item.code === stored || selectable(item))) {
       select.add(new Option(item.name, item.code));
     }
-    select.value = current || "";
+    select.value = stored ?? "";
   }
   // The list's 身分別 checklist in 身分別 order: a stopped identity only while registrations use it, then 未填身分 ("").
   // Every box defaults to checked so form.reset() means 全部身分; a redraw keeps what was unchecked.

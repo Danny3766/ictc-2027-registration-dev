@@ -9,14 +9,14 @@ alter table public.site_settings
 alter table public.registration_hosting add column answer_valid boolean not null default true;
 alter table public.registration_pickup add column answer_valid boolean not null default true;
 
--- Previous wrappers always generated 否 for non-general identities. Audit child_updated also
--- identifies generated answers retained after returning to general without explicit confirmation.
+-- A 否 is invalid only when the latest audit row that set it is a system action (child_updated,
+-- hosting_general_only). Identity never decides it: older saves audit meal_identity too, so a
+-- student's own 否 looks the same. shortcut: a 否 that 202611100004 forced inside registration.updated
+-- or staff_updated stays valid; only a non-general save made between 202611100004 and this one leaves it.
 update public.registration_hosting h set answer_valid=false
 from public.registrations r where r.id=h.registration_id and (
-  coalesce(r.meal_identity,'general')<>'general' or h.status='not_hosting' and coalesce((
-    -- A non-general save had its hosting forced to 否 inside registration.updated/staff_updated too.
+  h.status='not_hosting' and coalesce((
     select e.action in ('registration.child_updated','registration.hosting_general_only')
-      or coalesce(e.after_data->>'meal_identity','general')<>'general'
     from public.audit_events e where e.target_id=r.id and (
       e.action in ('registration.created','registration.staff_created') and e.after_data->'hosting' is not null
       or e.action='registration.child_updated' and e.after_data->'hosting' is not null
@@ -25,7 +25,7 @@ from public.registrations r where r.id=h.registration_id and (
     order by e.created_at desc,e.id desc limit 1),false));
 update public.registration_pickup p set answer_valid=false
 from public.registrations r where r.id=p.registration_id and (
-  coalesce(r.meal_identity,'general')<>'general' or p.status='no' and coalesce((
+  p.status='no' and coalesce((
     select e.action in ('registration.child_updated','registration.hosting_general_only')
     from public.audit_events e where e.target_id=r.id and (
       e.action='registration.pickup_updated'

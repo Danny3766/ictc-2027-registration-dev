@@ -20,7 +20,7 @@ const openPage = (open = true) => ({
 });
 
 const queried = (canChange) => ({
-  full_name: "測試登記", district_id: 1, can_change: canChange,
+  full_name: "測試登記", district_id: 1, can_change: canChange, meal_identity: "general",
   choices: [{ activity_id: 1, title: "測試活動", attending: true }],
 });
 
@@ -708,6 +708,44 @@ test("while hosting is closed, the lookup shows the answer read-only and saves a
     meal_identity: "general", child_type: "", parent_name: null });
 });
 
+test("an older registration without an identity keeps its hosting answer and must pick an identity to save", async ({ page }) => {
+  const requests = [];
+  await page.route("**/functions/v1/registration", async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: hostingPage(true) });
+    const body = route.request().postDataJSON();
+    requests.push(body);
+    // The first lookup finds a 學生, the next one an older registration without an identity.
+    const queries = requests.filter((request) => request.action === "query").length;
+    if (body.action === "query") return route.fulfill({ json: { ...queried(true), hosting: brothers,
+      meal_identity: queries === 1 ? "student" : null } });
+    return route.fulfill({ json: { success: true } });
+  });
+  await page.goto("/");
+  await query(page);
+  const identity = page.locator("#edit-form").getByRole("combobox", { name: "身分別", exact: true });
+  const hosting = page.locator("#edit-hosting-section");
+  await expect(identity).toHaveValue("student");
+  await query(page);
+  // Viewing counts the missing identity as general, so the saved answer still shows.
+  await expect(identity).toHaveValue("");
+  await expect(hosting).toContainText("開家接待：是，可接待 2 位（弟兄）");
+
+  await page.getByRole("button", { name: "修改登記內容" }).click();
+  await expect(identity).toHaveValue("");
+  // As on a new registration, the survey waits for an identity; the saved answer stays read-only.
+  await expect(hosting.locator("input, select")).toHaveCount(0);
+  await expect(hosting).toContainText("開家接待：是，可接待 2 位（弟兄）");
+  await page.locator('#edit-form input[name="activity_1"][value="false"]').check();
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  expect(requests).toHaveLength(2);
+
+  await identity.selectOption("general");
+  await expect(hosting.getByLabel("是", { exact: true })).toBeChecked();
+  await page.getByRole("button", { name: "儲存修改" }).click();
+  await expect(page.locator("#page-message")).toHaveText("修改已儲存，以下為目前登記內容。");
+  expect(requests[2]).toMatchObject({ action: "update", meal_identity: "general", hosting: brothers });
+});
+
 test("a lookup without a hosting answer hides the section while hosting is closed", async ({ page }) => {
   await page.route("**/functions/v1/registration", async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: hostingPage(false) });
@@ -1377,7 +1415,8 @@ test("the lookup shows name, 區 and 兒童 in one row, and a child's parent nam
     requests.push(body);
     if (body.action === "query") return route.fulfill({ json: { ...queried(true),
       choices: [{ activity_id: 1, title: "測試活動", attending: true }, { activity_id: 2, title: "接待家庭聚餐", attending: true }],
-      hosting: { status: "not_hosting" }, pickup: { status: "no", count: 0 }, is_child: true, child_type: "elementary", parent_name: "王爸爸" } });
+      hosting: { status: "not_hosting" }, pickup: { status: "no", count: 0 }, is_child: true, child_type: "elementary", parent_name: "王爸爸",
+      meal_identity: "child" } });
     return route.fulfill({ json: { success: true } });
   });
   await page.goto("/");

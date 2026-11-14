@@ -48,7 +48,7 @@ async function mockStaff(page, role, onRequest = () => {}, registrationName = "�
     const result = {
       me: { profile: { auth_user_id: "123e4567-e89b-42d3-a456-426614174000", display_name: "測試服事者", role, must_change_password: false } },
       list_reference: { settings: { event_name: "測試", is_registration_open: false }, districts: [{ id: 1, name: "林森", sort_order: 1 }], activities: [{ id: 1, title: "測試聚會", is_published: true, fee_amount: 0 }], program: [] },
-      list_registrations: { count: 1, registrations: [{ id: "223e4567-e89b-42d3-a456-426614174000", serial_no: 1, full_name: registrationName, district_id: 1, record_status: "active", import_status: "pending", registration_choices: [{ activity_id: 1, attending: false }], updated_at: "2026-11-04T00:00:00Z" }] },
+      list_registrations: { count: 1, registrations: [{ id: "223e4567-e89b-42d3-a456-426614174000", serial_no: 1, full_name: registrationName, district_id: 1, record_status: "active", import_status: "pending", meal_identity: "general", registration_choices: [{ activity_id: 1, attending: false }], updated_at: "2026-11-04T00:00:00Z" }] },
       list_staff: { staff: [] },
       save_registration: { success: true },
       save_reference: { saved: {} },
@@ -642,8 +642,25 @@ test("editing an old registration leaves a newer activity unanswered", async ({ 
   await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記", twoActivities);
   await login(page);
   await page.getByRole("button", { name: "查看／處理" }).click();
-  await expect(page.locator("#detail-choices")).toContainText("（未回覆，可留空）");
+  // Viewing: the chosen 不參加 is a grey pill, the radio dots are only visually hidden (a screen reader
+  // still finds the checked one), the unanswered activity shows a 未回覆 tag.
+  const answered = page.locator('#detail-choices [data-activity="1"]');
+  const unanswered = page.locator('#detail-choices [data-activity="2"]');
+  const radioWidth = async () => (await answered.getByRole("radio").first().boundingBox()).width;
+  await expect(answered.locator("label").filter({ hasText: "不參加" })).toHaveCSS("background-color", "rgb(75, 85, 96)");
+  await expect(answered.locator("label").filter({ hasText: /^參加$/ })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(answered.getByRole("radio", { name: "不參加" })).toBeChecked();
+  expect(await radioWidth()).toBeLessThanOrEqual(1);
+  await expect(page.locator('#edit-registration-form input[name="full_name"]')).toHaveCSS("color", "rgb(36, 48, 43)");
+  await expect(unanswered.locator(".unanswered-tag")).toBeVisible();
+  await expect(unanswered.locator(".unanswered-hint")).toBeHidden();
+  await expect(unanswered.locator("label").first()).toBeHidden();
   await page.getByRole("button", { name: "修改登記資料" }).click();
+  // Editing restores the plain radios and the hint.
+  await expect(answered.locator("label").filter({ hasText: "不參加" })).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  expect(await radioWidth()).toBeGreaterThan(1);
+  await expect(unanswered.locator(".unanswered-hint")).toHaveText("（未回覆，可留空）");
+  await expect(unanswered.locator(".unanswered-tag")).toBeHidden();
   await page.locator('#edit-registration-form input[name="full_name"]').fill("修改後姓名");
   await page.getByRole("button", { name: "儲存登記" }).click();
   await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
@@ -1135,10 +1152,16 @@ const hostedRegistrations = {
       registration_choices: [{ activity_id: 1, attending: false }], updated_at: "2026-11-05T00:00:00Z", registration_hosting: null, registration_pickup: { status: "no", count: 0 } },
   ] } }),
 };
+// The same records with an identity, for tests that edit them: a record without one must pick one first.
+const hostedGeneralRegistrations = { ...hostedRegistrations, list_registrations: () => {
+  const result = hostedRegistrations.list_registrations();
+  for (const registration of result.json.registrations) registration.meal_identity = "general";
+  return result;
+} };
 
 test("staff edit a hosting answer, and an existing answer cannot be cleared", async ({ page }) => {
   let saved;
-  await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記", hostedRegistrations);
+  await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記", hostedGeneralRegistrations);
   await login(page);
   await page.getByRole("row", { name: /接待弟兄/ }).getByRole("button", { name: "查看／處理" }).click();
   const hosting = page.locator("#detail-hosting");
@@ -1168,9 +1191,39 @@ test("staff edit a hosting answer, and an existing answer cannot be cleared", as
   expect(saved.pickup).toEqual({ status: "no", count: 0 });
 });
 
+test("a record without an identity shows its hosting answer, and staff pick an identity before saving", async ({ page }) => {
+  let saved;
+  const studentFirst = { ...hostedRegistrations, list_registrations: () => {
+    const result = hostedRegistrations.list_registrations();
+    result.json.registrations[0].meal_identity = null;
+    result.json.registrations[1].meal_identity = "student";
+    return result;
+  } };
+  await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記", studentFirst);
+  await login(page);
+  const identity = page.locator("#edit-registration-form").getByRole("combobox", { name: "身分別", exact: true });
+  // The record opened before must not lend its identity to one without.
+  await page.getByRole("row", { name: /接待夫婦/ }).getByRole("button", { name: "查看／處理" }).click();
+  await expect(identity).toHaveValue("student");
+  await page.getByRole("row", { name: /接待弟兄/ }).getByRole("button", { name: "查看／處理" }).click();
+  const hosting = page.locator("#detail-hosting");
+  await expect(identity).toHaveValue("");
+  await expect(hosting.getByLabel("是", { exact: true })).toBeChecked();
+  await page.getByRole("button", { name: "修改登記資料" }).click();
+  await expect(identity).toHaveValue("");
+  await page.getByRole("button", { name: "儲存登記" }).click();
+  expect(saved).toBeUndefined();
+  await identity.selectOption("general");
+  await expect(hosting.getByLabel("是", { exact: true })).toBeChecked();
+  await page.getByRole("button", { name: "儲存登記" }).click();
+  await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
+  expect(saved.meal_identity).toBe("general");
+  expect(saved.hosting).toEqual({ status: "hosting", guest_type: "brother", guest_count: 2 });
+});
+
 test("a void registration shows its hosting answer with every control disabled", async ({ page }) => {
   const voided = { list_reference: hostedRegistrations.list_reference, list_registrations: () => {
-    const result = hostedRegistrations.list_registrations();
+    const result = hostedGeneralRegistrations.list_registrations();
     result.json.registrations[0] = { ...result.json.registrations[0], record_status: "void" };
     return result;
   } };
@@ -1191,7 +1244,7 @@ test("a void registration shows its hosting answer with every control disabled",
 
 test("a record opens locked for viewing; 修改登記資料 unlocks it and 取消修改 restores it", async ({ page }) => {
   let saved;
-  await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記", hostedRegistrations);
+  await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記", hostedGeneralRegistrations);
   await login(page);
   await page.getByRole("row", { name: /接待弟兄/ }).getByRole("button", { name: "查看／處理" }).click();
   const form = page.locator("#edit-registration-form");
@@ -1779,7 +1832,7 @@ test("staff saving a sign-up from before a restriction confirm that it becomes �
 test("an unanswered restricted activity stays 未回覆 when staff save an older registration", async ({ page }) => {
   let saved;
   await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記",
-    mealReplies([mealRegistration(3, "乙", { 2: false, 3: false }, null)]));
+    mealReplies([mealRegistration(3, "乙", { 2: false, 3: false }, null, "general")]));
   const dialogs = [];
   page.on("dialog", (dialog) => { dialogs.push(dialog.message()); return dialog.dismiss(); });
   await login(page);
@@ -2413,6 +2466,13 @@ test("admins manage meal identities, and prices typed into the activity form sur
   page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#identity-rows tr").filter({ hasText: "服事者" }).getByRole("button", { name: "刪除" }).click();
   await expect(page.locator("#identity-rows")).not.toContainText("服事者");
+  // 學生 is reserved too, yet stays selectable as the 學生統計身分.
+  const student = page.locator("#identity-rows tr").filter({ hasText: "學生" });
+  await expect(student.getByRole("button", { name: "刪除" })).toHaveCount(0);
+  await student.getByRole("button", { name: "編輯" }).click();
+  await expect(form.getByLabel("啟用", { exact: true })).toBeDisabled();
+  await expect(form.getByLabel("開放報名者選擇")).toBeDisabled();
+  await expect(page.locator("#student-statistics-identity-form option")).toHaveText(["未指定", "學生"]);
   const general = page.locator("#identity-rows tr").filter({ hasText: "一般" });
   await expect(general.getByRole("button", { name: "刪除" })).toHaveCount(0);
   await general.getByRole("button", { name: "編輯" }).click();

@@ -1,11 +1,10 @@
 -- 2026-11-10: only 一般 (code general) answers 開家接待 and 接機接待. Decisions are in
 -- docs/需求討論與決策紀錄.md, section "接待題限一般身分、提醒區塊與查詢結果版面".
--- Before applying, run supabase/testing/preview-hosting-general-only.sql and have the project lead
--- confirm the listed registrations. Apply with registration closed, then deploy the site.
+-- Apply with registration closed, then deploy the site.
 --   * Students and custom identities answer neither survey, like children: both are stored as 否,
 --     and they are outside the hosting and pickup audiences (an activity: prerequisite still holds).
 --   * A registration without an identity (from before the unified identity) is left as it is.
---   * Existing active registrations with such an identity get 否 now, each with an audit row.
+--   * Existing registrations keep their answers; this migration does not rewrite them.
 begin;
 
 -- Set by the wrappers below while saving a non-general, non-child registration.
@@ -329,33 +328,5 @@ revoke all on function public.registration_skipping_hosting(),
 grant execute on function public.registration_skipping_hosting(),
   public.registration_child_save(text,uuid,uuid,public.registrations,text,text,boolean)
   to service_role;
-
--- Existing active registrations with a non-general, non-child identity: 否 for both surveys, audited.
-do $$
-declare v_registration public.registrations; v_hosting jsonb; v_pickup jsonb;
-begin
-  for v_registration in
-    select * from public.registrations
-    where record_status = 'active' and not is_child and meal_identity is not null
-      and meal_identity not in ('general', 'child', 'preschool')
-    order by serial_no
-    for update
-  loop
-    v_hosting := public.registration_hosting_get(v_registration.id);
-    v_pickup := public.registration_pickup_get(v_registration.id);
-    if public.registration_child_answers_put(v_registration.id) then
-      update public.registrations set updated_at = now(),
-        import_status = case when import_status = 'imported' then 'reimport_needed' else import_status end
-      where id = v_registration.id;
-      insert into public.audit_events (actor_type, action, target_type, target_id, before_data, after_data)
-      values ('maintenance', 'registration.hosting_general_only', 'registration', v_registration.id,
-        jsonb_build_object('meal_identity', v_registration.meal_identity, 'hosting', v_hosting, 'pickup', v_pickup),
-        jsonb_build_object('meal_identity', v_registration.meal_identity,
-          'hosting', public.registration_hosting_get(v_registration.id),
-          'pickup', public.registration_pickup_get(v_registration.id)));
-    end if;
-  end loop;
-end;
-$$;
 
 commit;

@@ -315,7 +315,8 @@ function showEditChild() {
   editParentInput.disabled = !child;
 }
 
-const currentEditIdentity = () => editMode ? Meals.readIdentity(editForm) : queriedIdentityBaseline;
+// Viewing counts a missing identity as general, as the server does for survey eligibility.
+const currentEditIdentity = () => editMode ? Meals.readIdentity(editForm) : queriedIdentityBaseline ?? "general";
 const checkedHostingStatus = (container) => container.querySelector('[name="hosting_status"]:checked')?.value ?? null;
 
 // Restricted activities follow the current hosting, pickup and activity answers.
@@ -644,9 +645,10 @@ queryForm.addEventListener("submit", async (event) => {
     queriedChoicesBaseline = sortedChoices(registration.choices);
     queriedHostingBaseline = Hosting.normalize(registration.hosting);
     queriedPickupBaseline = Pickup.normalize(registration.pickup);
-    // The saved identity stays an option even when no longer publicly selectable.
+    // The saved identity stays an option even when no longer publicly selectable. An older registration
+    // without one stays empty, so editing it asks for an identity.
     queriedIdentityBaseline = registration.meal_identity
-      ?? (registration.child_type === "preschool" ? "preschool" : registration.is_child ? "child" : "general");
+      ?? (registration.child_type === "preschool" ? "preschool" : registration.is_child ? "child" : null);
     queriedCanChange = registration.can_change;
     editForm.hidden = false;
     showConfirmation();

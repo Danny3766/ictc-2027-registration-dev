@@ -1,6 +1,6 @@
 # ICTC 2027 登記系統 TODO
 
-> 更新日期：2026-11-14。已完成並發布的項目已刪除，過程與結果見 [驗收紀錄](驗收紀錄.md)、[需求討論與決策紀錄](需求討論與決策紀錄.md) 與 git 歷史。
+> 更新日期：2026-11-15。已完成並發布的項目已刪除，過程與結果見 [驗收紀錄](驗收紀錄.md)、[需求討論與決策紀錄](需求討論與決策紀錄.md) 與 git 歷史。
 
 ## 目前狀態
 
@@ -9,24 +9,31 @@
 | 正式站 | `main`，PR #41（2026-11-08） | 套用至 `202611070001` | `staff` 為 2026-11-08 版 |
 | 測試站 | `develop`，PR #58（2026-11-13） | 確定套用至 `202611100004`（2026-11-10）；`202611110001`～`202611110004` 未記錄 | `staff` 為 2026-11-10 版之後未記錄 |
 
-`develop` 比 `main` 多 PR #42～#58，正式站下一次發布要一起帶上。
+`develop` 比 `main` 多 PR #42～#60，正式站下一次發布要一起帶上。
 
-## 進行中：免費身分的費用文字（`feat/free-identity-price-text`）
+## 進行中：正式站發布時保留既有登記資料（`fix/preserve-prod-registrations`）
 
-- [x] 從 `origin/develop` 建立分支，先記錄決策於[需求討論與決策紀錄](需求討論與決策紀錄.md)及[用餐身分管理](用餐身分管理.md)「免費身分的費用文字」。
-- [x] 修改 `site/meals.js` 的 `priceText()`：填 0 的身分合併於句尾寫「免費」，全部已設定且為 0 時只寫「免費」；同價收費身分合併（Q7 修訂）；各身分改依身分別排序列出，不再依 API 回傳順序。
-- [x] `site/admin/staff.js`：儲存或排序身分別後重畫活動列表，費用文字跟著更新；活動排序中則在完成或取消排序時重畫。`tests/staff.spec.mjs` 補對應測試，桌機／手機 Chromium 與 WebKit 通過。
-- [x] `scripts/identity-pricing.test.mjs` 補合併免費、同價合併、全部免費、一般填 0、留空、一般不在第一位、停用身分與後台限定身分案例，8 項通過。`read-only`、`staff`、`identities` 在 desktop-chromium 共 139 項，整批執行有時全過，有時 `staff.spec.mjs`「the 身分別 checklist filters by several identities…」版面檢查的 `boundingBox()` 拿到 null 而失敗；該項單獨重跑 5 次皆通過，修改前已有此現象，與本次修改無關。
-- [ ] 送 PR 至 `develop`，測試站只需發布前端，驗收公開頁與後台活動詳情的費用文字。
+決策見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-14 正式站發布時保留既有登記資料」。
+
+- [x] 從 `develop` 建立分支，先記錄決策與文件。
+- [x] `202611090002`：回填只處理兒童，沒有身分的登記保留空白（Q7）。
+- [x] `202611100004`：刪除改寫既有登記接待答案的區塊（Q8）。
+- [x] `202611110003`：回填拿掉「非一般身分一律標為無效」的條件，只依審計紀錄判斷系統自動產生的「否」（Q8）。審計紀錄的判斷也拿掉「儲存時身分不是一般」：`main` 的舊版儲存同樣在審計紀錄寫入身分，學生本人選的「否」會被誤判；現在只認 `registration.child_updated`、`registration.hosting_general_only` 兩種系統動作，這兩種在正式站都不存在。
+- [x] 新增 `202611140001_student_identity_reserved.sql`：學生加入保留規則與刪除保護（Q11、Q12）。本機從 `main` 結構重播到此支：停用、改僅後台、刪除學生都被擋下，可改名，仍可指定為學生統計身分。`verify-unified-identity.sql` 原本停用學生來測「停用身分仍算已使用」，改用測試用的自訂身分；身分相關 7 支 verify 腳本在本機通過。
+- [x] 後台：學生不顯示刪除、不能改啟用與開放選擇；「學生統計身分」仍可選學生；更新提示文字。`tests/staff.spec.mjs`「admins manage meal identities…」補學生的檢查，身分相關 6 個測試在桌機／手機 Chromium 與 WebKit 共 24 項通過。
+- [x] 前端：沒有身分的登記在公開查詢結果與後台詳情不再預選「一般」，修改時必須選身分才能儲存（Q19、Q20）。只查看時接待答案照舊視為一般身分顯示；公開頁修改中還沒選身分時，接待答案以唯讀文字顯示。`read-only.spec.mjs`、`staff.spec.mjs` 各補一項，換回舊版程式兩項都會失敗；兩項都先開一筆有身分的登記，確認下一筆沒有身分時不沿用前一筆的選項（`Meals.renderIdentity()` 收到 `null` 會清空，省略才保留目前選項）；原本沒有身分、靠預選一般的測試假資料改成帶一般。完整測試四個瀏覽器 602 項通過、22 項略過、沒有失敗（Chromium 與 WebKit 分兩批執行）；先前整批執行時「the 身分別 checklist filters…」偶有版面量測失敗（既有現象），這次沒有出現。
+- [x] 本機隔離資料庫從 `main` 的結構重播全部 13 支新 migration（到 `202611140001`），用虛構舊登記比對：登記、活動回覆、開家、接機的欄位與審計筆數都沒變，接待答案全部有效。再照部署後設定（開家可填一般與學生、接機只有一般、學生統計身分指定學生）取統計：沒有身分的登記照常列入人數，開家答案算一般身分的答案；學生的接機答案仍有效，計入接機統計與 CSV，與[接待身分設定](接待身分設定.md)「取消身分資格保留原答案」一致。`main` 沒有兒童欄位，正式站沒有兒童登記，`202611090002` 的兒童回填在正式站不會改到資料。沒有身分的登記在公開修改與後台的行為見上一項，CSV 由既有 Playwright 案例涵蓋。
+- [x] 準備正式站唯讀查詢：發布前後比對 `supabase/testing/compare-preserved-registrations.sql`（Q4），只輸出筆數與 md5，並在檔頭附發布後確認沒有無效接待答案的查詢；學生接待答案預覽沿用 `preview-hosting-general-only.sql`（Q2）；測試站套用前的檢查寫在 `202611140001` 檔頭。本機重播驗證：比對查詢在 `main` 結構與新結構都能執行，新版前後結果相同；換成舊版 migration 時，身分、匯入狀態、開家、接機與審計筆數的差異都會出現。
+- [ ] 送 PR 至 `develop`；測試站先執行 `202611140001` 檔頭的檢查查詢，學生為啟用且開放選擇才套用，再發布前端與 `staff` Edge Function（學生統計身分的錯誤訊息改成「不是一般或兒童」，因為學生成為保留身分後仍可指定）。
 
 ## 測試站：補齊部署並驗收
 
-前端已更新到 PR #58，以下確認後端跟上。
+前端已更新到 PR #58，PR #59、#60 尚未發布；以下確認後端跟上。
 
 - [ ] 名單身分篩選與學生統計（PR #57）：依序套用 `202611130001_student_statistics_identity.sql` → `verify-student-statistics-identity.sql` → staff Edge Function。驗收名單身分篩選（含 PostgREST 篩選）與學生統計，再由管理員指定學生統計身分；首次部署不自動指定。staff Edge Function 更新前，舊版會忽略名單身分篩選並回傳整份名單，不要據此驗收。本機驗證結果見[用餐身分管理](用餐身分管理.md)「指定學生身分統計」「名單身分篩選」。
-- [ ] 確認測試專案已依序套用 `202611110001_staff_performance.sql`、`202611110002_conference_import_status.sql`、`202611110003_survey_identities.sql`、`202611110004_identity_reorder.sql`，並部署 `develop` 上的 `registration`、`staff` Edge Function；未套用的依序補上。`202611110003` 前先關閉登記，完成後恢復原開放狀態。每支套用後執行對應的 `verify-staff-performance.sql`、`verify-conference-import-status.sql`、`verify-survey-identities.sql`、`verify-identity-reorder.sql`。結果記在[驗收紀錄](驗收紀錄.md)。
+- [ ] 確認測試專案已依序套用 `202611110001_staff_performance.sql`、`202611110002_conference_import_status.sql`、`202611110003_survey_identities.sql`、`202611110004_identity_reorder.sql`，並部署 `develop` 上的 `registration`、`staff` Edge Function；未套用的依序補上。`202611110003` 前先關閉登記，完成後恢復原開放狀態；若這支還沒套用，非一般身分在 `202611100004` 之後儲存時被改成的開家「否」，部分會維持有效（只影響測試資料）。每支套用後執行對應的 `verify-staff-performance.sql`、`verify-conference-import-status.sql`、`verify-survey-identities.sql`、`verify-identity-reorder.sql`。結果記在[驗收紀錄](驗收紀錄.md)。
 - [ ] 在測試專案執行尚未留紀錄的驗證腳本：`verify-child-registration.sql`、`verify-child-type.sql`、`verify-registration-identities.sql`、`verify-independent-identity-prices.sql`、`verify-unified-identity.sql`。
-- [ ] 請專案負責人與弟兄們驗收 PR #43～#58 的功能，各項細節見對應文件：
+- [ ] 請專案負責人與弟兄們驗收 PR #43～#60 的功能，各項細節見對應文件：
   - 兒童報名、兒童類型與親子對應、名單兒童條件：[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-09 兒童報名」「兒童類型」。
   - 身分別管理、各身分價格、統一身分別、身分標籤、拖拉排序：[用餐身分管理](用餐身分管理.md)。
   - 接待題依身分開放、藍色提醒區塊、查詢結果外框：[接待身分設定](接待身分設定.md)。
@@ -34,6 +41,7 @@
   - 後台效能與身分別區塊、公開表單缺漏欄位提示。
   - 名單身分篩選、指定學生身分統計（PR #57，後端部署後驗收）：[用餐身分管理](用餐身分管理.md)。
   - 公開查詢頁修改時鎖定查詢欄位、漏選活動紅框（PR #58）：[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-13 公開查詢頁修改時鎖定查詢欄位」「2026-11-13 公開頁漏選活動的紅框提示」。
+  - 免費身分的費用文字（PR #59）、後台登記詳情的唯讀樣式（PR #60）：[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-14 免費身分的費用文字」「2026-11-14 後台登記詳情的唯讀樣式」。
 - [ ] 確認兒童類型標籤色碼（學齡前粉色底、國小粉藍底）。
 
 ## 正式站：下一次發布（`develop` → `main`）
@@ -41,11 +49,13 @@
 含 migration，依[正式環境設定流程](正式環境setup.md) 9-3 關閉登記後更新。測試站驗收通過才執行。
 
 - [ ] 依 9-3 關閉登記，通知服事者。
-- [ ] 執行 `supabase/testing/preview-hosting-general-only.sql`（唯讀），請專案負責人確認受影響名單。結果含個資，不貼到 repo、PR 或對話。
-- [ ] 正式專案依序套用 `202611090001`～`202611130001` 共 12 支 migration，每支記在[正式環境設定流程](正式環境setup.md)第 3 節。
+- [ ] 留底：後台下載報名登記 CSV 與統計 CSV，執行 `supabase/testing/compare-preserved-registrations.sql` 並記下結果（只有筆數與 md5，不含姓名）。結果留在本機，[驗收紀錄](驗收紀錄.md)只寫兩次是否相同，不寫筆數。
+- [ ] 正式專案依序套用 `202611090001`～`202611140001` 共 13 支 migration，每支記在[正式環境設定流程](正式環境setup.md)第 3 節。任一支失敗就停下，保持關閉登記。
+- [ ] 執行 `supabase/testing/preview-hosting-general-only.sql`（唯讀；`main` 的結構沒有它用到的 `is_child` 與 `registration_identities`，所以排在套用 migration 之後），請專案負責人確認學生身分登記的接待答案。結果含個資，不貼到 repo、PR 或對話。
 - [ ] 部署 `registration` 與 `staff` Edge Function，Verify JWT 依第 5 節設定。
 - [ ] 以 **Create a merge commit** 合併 `develop` → `main`，依 7-4、8 節核對，結果記在[驗收紀錄](驗收紀錄.md)。
-- [ ] 管理員在正式站後台指定學生統計身分，確認「其中學生」人數。
+- [ ] 再執行一次 `compare-preserved-registrations.sql`，兩次結果相同才繼續；再執行檔頭的無效接待答案查詢，兩個數字都要是 0。
+- [ ] 管理員在正式站後台：把 `general` 改名「聖徒」、學生統計身分指定學生、開家接待可填身分加入學生（接機維持只有聖徒），確認「其中學生」人數。
 - [ ] 重新開放登記，通知服事者維護結束。
 - [ ] 在 LINE 群組公告：已幫兒童登記的家庭，用「查詢或修改登記」選擇兒童類型並填家長姓名。
 

@@ -246,6 +246,20 @@ tr.dragging .drag-handle { cursor: grabbing; }
 
 .activity-panel .staff-choice { grid-template-columns: minmax(0, 1fr) 5.5rem 5.5rem; }
 
+/* 登記詳情 view mode: disabled fields keep dark text, the chosen answer becomes a filled pill
+   (參加／是／家人已登記 green, 不參加／否 grey), and the others fade. Editing is untouched. */
+.unanswered-tag { display: none; }
+#edit-registration-form.viewing :is(input, select):disabled { color: #24302b; -webkit-text-fill-color: #24302b; background: #eef3f0; opacity: 1; }
+/* Visually hidden, not display: none, so a screen reader still hears which answer is checked. */
+#edit-registration-form.viewing input[type="radio"]:disabled { position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; }
+#edit-registration-form.viewing label:has(> input[type="radio"]:disabled) { padding: .1rem .7rem; border-radius: 999px; color: #75817b; }
+#edit-registration-form.viewing label:has(> input[type="radio"]:disabled:checked) { color: #fff; background: #23624b; font-weight: 700; }
+#edit-registration-form.viewing label:has(> input:is([value="false"], [value="not_hosting"], [value="no"]):disabled:checked) { background: #4b5560; }
+#edit-registration-form.viewing .staff-choice:has(> .unanswered-tag) > :is(label, .unanswered-hint) { display: none; }
+#edit-registration-form.viewing .staff-choice > .unanswered-tag { display: inline-block; grid-area: 1 / 2 / 2 / 4; justify-self: start;
+  padding: .1rem .7rem; border: 1px solid #75817b; border-radius: 999px; color: #4b5560; font-size: 1rem; }
+
 .child-badge { display: inline-block; margin-left: .5em; padding: .15em .5em; border-radius: .4em; font-size: .85em; color: #253348; }
 /* Statistics: child-type counts and fees' left-out notes sit under the number. */
 .stat-details { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .3rem; margin-top: .35rem; font-size: .85em; }
