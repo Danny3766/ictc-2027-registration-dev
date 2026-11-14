@@ -26,6 +26,17 @@
 - [x] 準備正式站唯讀查詢：發布前後比對 `supabase/testing/compare-preserved-registrations.sql`（Q4），只輸出筆數與 md5，並在檔頭附發布後確認沒有無效接待答案的查詢；學生接待答案預覽沿用 `preview-hosting-general-only.sql`（Q2）；測試站套用前的檢查寫在 `202611140001` 檔頭。本機重播驗證：比對查詢在 `main` 結構與新結構都能執行，新版前後結果相同；換成舊版 migration 時，身分、匯入狀態、開家、接機與審計筆數的差異都會出現。
 - [ ] 送 PR 至 `develop`；測試站先執行 `202611140001` 檔頭的檢查查詢，學生為啟用且開放選擇才套用，再發布前端與 `staff` Edge Function（學生統計身分的錯誤訊息改成「不是一般或兒童」，因為學生成為保留身分後仍可指定）。
 
+## 進行中：換成不能填的身分時接待答案一律存「否」（`fix/child-switch-pickup-no`）
+
+決策見[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-15 換成不能填的身分時接待答案一律存『否』」。
+
+- [x] 從 `develop` 建立分支，先記錄決策與文件。
+- [x] 新增 `202611150001_identity_change_survey_no.sql`：儲存函式判斷「離開」時不再要求原身分能填（Q22）；原身分也不能填時，只有有效答案才改成否，沒有答案或失效答案維持未回答。
+- [x] 公開頁 `editLeaves()` 同步修改，存檔前顯示接機也會變成「否」。`survey-identities.spec.mjs`、`verify-survey-identities.sql` 各補學生改兒童的案例，換回舊版都會失敗。
+- [x] 審查修正：失效答案（例如舊系統自動否）視同未回答，換身分不會變成有效的否；沒有身分的舊登記選一般不算換身分。`verify-survey-identities.sql` 補這兩個案例、`survey-identities.spec.mjs` 補失效答案案例，換回修正前都會失敗。完整測試四個瀏覽器 610 項通過、22 項略過。
+- [x] 本機從 `main` 結構重播到 `202611150001`：`compare-preserved-registrations.sql` 前後結果相同（審查修正只改函式內容，不動資料）；16 支 verify 腳本全部通過。
+- [ ] 送 PR 至 `develop`；測試站套用 `202611150001` 並發布前端，用已重現的那筆登記驗收。
+
 ## 測試站：補齊部署並驗收
 
 前端已更新到 PR #58，PR #59、#60 尚未發布；以下確認後端跟上。
@@ -50,14 +61,14 @@
 
 - [ ] 依 9-3 關閉登記，通知服事者。
 - [ ] 留底：後台下載報名登記 CSV 與統計 CSV，執行 `supabase/testing/compare-preserved-registrations.sql` 並記下結果（只有筆數與 md5，不含姓名）。結果留在本機，[驗收紀錄](驗收紀錄.md)只寫兩次是否相同，不寫筆數。
-- [ ] 正式專案依序套用 `202611090001`～`202611140001` 共 13 支 migration，每支記在[正式環境設定流程](正式環境setup.md)第 3 節。任一支失敗就停下，保持關閉登記。
-- [ ] 執行 `supabase/testing/preview-hosting-general-only.sql`（唯讀；`main` 的結構沒有它用到的 `is_child` 與 `registration_identities`，所以排在套用 migration 之後），請專案負責人確認學生身分登記的接待答案。結果含個資，不貼到 repo、PR 或對話。
+- [ ] 正式專案依序套用 `202611090001`～`202611150001` 共 14 支 migration，每支記在[正式環境設定流程](正式環境setup.md)第 3 節。任一支失敗就停下，保持關閉登記。
+- [ ] 執行 `supabase/testing/preview-hosting-general-only.sql`（唯讀；`main` 的結構沒有它用到的 `is_child` 與 `registration_identities`，所以排在套用 migration 之後），請專案負責人確認學生身分登記的接待答案，並認出其實是國小或學齡前的學生，這些登記改成兒童後開家、接機會變成「否」（2026-11-15 Q24）。結果含個資，不貼到 repo、PR 或對話。
 - [ ] 部署 `registration` 與 `staff` Edge Function，Verify JWT 依第 5 節設定。
 - [ ] 以 **Create a merge commit** 合併 `develop` → `main`，依 7-4、8 節核對，結果記在[驗收紀錄](驗收紀錄.md)。
 - [ ] 再執行一次 `compare-preserved-registrations.sql`，兩次結果相同才繼續；再執行檔頭的無效接待答案查詢，兩個數字都要是 0。
 - [ ] 管理員在正式站後台：把 `general` 改名「聖徒」、學生統計身分指定學生、開家接待可填身分加入學生（接機維持只有聖徒），確認「其中學生」人數。
 - [ ] 重新開放登記，通知服事者維護結束。
-- [ ] 在 LINE 群組公告：已幫兒童登記的家庭，用「查詢或修改登記」選擇兒童類型並填家長姓名。
+- [ ] 在 LINE 群組公告：已幫兒童登記的家庭，用「查詢或修改登記」選擇兒童類型（國小或學齡前）並填家長姓名；家長姓名請填家長本人登記時用的姓名，後台才對得上親子（2026-11-15 Q23）。
 
 ## 上線前移除的多餘程式碼與欄位
 

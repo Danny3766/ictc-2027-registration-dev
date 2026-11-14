@@ -132,6 +132,34 @@ begin
     '{"status":"hosting","guest_type":"any","guest_count":5}','child',null,null,'Parent');
   assert public.registration_hosting_get(rid)->>'status'='not_hosting','STAFF_CLOSED_SURVEY_ANSWERED';
   settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"is_hosting_open":true}');
+  -- 2026-11-15: changing to an identity a survey is not open to turns a valid answer into 否 even when
+  -- the old identity could not answer it either; a survey never asked of the old identity stays unanswered.
+  settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"hosting_identity_codes":["general","student"],"pickup_identity_codes":["general","student"]}');
+  select registration_id into strict rid from public.create_registration_with_pickup(gen_random_uuid(),name||' switch',district,choices,
+    '{"status":"hosting","guest_type":"any","guest_count":2}','student','{"status":"yes","count":2}');
+  settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"pickup_identity_codes":["general"]}');
+  perform public.update_registration_with_pickup(name||' switch',district,choices,null,'student');
+  assert public.registration_pickup_get(rid)->>'status'='yes','UNCHANGED_IDENTITY_LOST_PICKUP';
+  perform public.update_registration_with_pickup(name||' switch',district,choices,null,'child',null,null,'Parent');
+  assert public.registration_hosting_get(rid)->>'status'='not_hosting','SWITCH_HOSTING_NOT_NO';
+  assert public.registration_pickup_get(rid)='{"status":"no","count":0}','SWITCH_PICKUP_NOT_NO';
+  assert exists(select 1 from public.audit_events where target_id=rid and action='registration.pickup_updated'
+    and before_data->'pickup'->>'status'='yes' and after_data->'pickup'->>'status'='no'),'SWITCH_PICKUP_AUDIT_MISSING';
+  select registration_id into strict rid from public.create_registration_with_pickup(gen_random_uuid(),name||' unasked',district,choices,
+    '{"status":"not_hosting"}','student',null);
+  perform public.update_registration_with_pickup(name||' unasked',district,choices,null,'child',null,null,'Parent');
+  assert public.registration_pickup_get(rid) is null,'UNASKED_PICKUP_STORED_NO';
+  -- An invalidated answer, such as an old system 否, counts as unanswered and stays as it is.
+  insert into public.registration_pickup(registration_id,status,count,answer_valid) values(rid,'no',0,false);
+  perform public.update_registration_with_pickup(name||' unasked',district,choices,null,'preschool',null,null,'Parent');
+  assert public.registration_pickup_get(rid)->>'answer_valid'='false','INVALID_PICKUP_STORED_NO';
+  -- A missing identity counts as general, so choosing general is no change and keeps the answer.
+  select registration_id into strict rid from public.create_registration_with_pickup(gen_random_uuid(),name||' blank',district,choices,
+    '{"status":"not_hosting"}','general','{"status":"yes","count":1}');
+  update public.registrations set meal_identity=null where id=rid;
+  settings:=public.staff_save_reception_settings(actor,'hosting',settings||'{"pickup_identity_codes":["student"]}');
+  perform public.update_registration_with_pickup(name||' blank',district,choices,null,'general');
+  assert public.registration_pickup_get(rid)->>'status'='yes','BLANK_TO_GENERAL_PICKUP_NO';
   assert not has_function_privilege('anon','public.save_registration_surveys(uuid,uuid,uuid,text,integer,jsonb,jsonb,text,jsonb,text,text)','EXECUTE'), 'ANON_SAVE_HELPER';
   assert not has_function_privilege('anon','public.update_registration_survey_result(text,integer,jsonb,jsonb,text,jsonb,text,text)','EXECUTE'), 'ANON_PUBLIC_SAVE_RPC';
   update public.site_settings set is_lookup_open=false where id;

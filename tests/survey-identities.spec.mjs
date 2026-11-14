@@ -54,6 +54,38 @@ test("lookup keeps non-target answers visible and read-only",async ({page})=>{
   await expect(page.locator('#edit-pickup [name="pickup_status"]')).toHaveCount(0);
 });
 
+test("a 學生 changed to 兒童 shows both surveys becoming 否, even pickup it could not answer",async ({page})=>{
+  const data=reference();
+  data.settings.hosting_identity_codes=["general","student"]; data.settings.pickup_identity_codes=["general"];
+  const writes=[];
+  await publicPage(page,data,record({meal_identity:"student"}),writes);
+  await lookup(page);
+  // Without a change of identity, the pickup answer it can no longer edit stays.
+  await expect(page.locator("#edit-pickup")).toContainText("3 位");
+  await expect(page.locator("#edit-pickup")).toContainText("目前此身分未開放修改");
+  await page.locator("#start-edit").click();
+  await page.locator('#edit-form [name="meal_identity"]').selectOption("child");
+  for (const [id,text] of [["#edit-hosting","開家接待：否"],["#edit-pickup","接機接待：否"]]) {
+    await expect(page.locator(id)).toContainText(text);
+    await expect(page.locator(id)).toContainText("此身分不需回答，儲存後為「否」");
+  }
+  await page.locator('#edit-form [name="parent_name"]').fill("家長");
+  await page.locator("#save-edit").click();
+  await expect.poll(()=>writes.length).toBe(1);
+  expect(writes[0]).toMatchObject({meal_identity:"child",parent_name:"家長"});
+});
+
+test("an invalidated pickup answer stays unanswered when 學生 changes to 兒童",async ({page})=>{
+  const data=reference();
+  data.settings.pickup_identity_codes=["general"];
+  await publicPage(page,data,record({meal_identity:"student",pickup:{status:"no",count:0,answer_valid:false}}));
+  await lookup(page);
+  await page.locator("#start-edit").click();
+  await page.locator('#edit-form [name="meal_identity"]').selectOption("child");
+  await expect(page.locator("#edit-hosting")).toBeVisible();
+  await expect(page.locator("#edit-pickup-survey")).toBeHidden();
+});
+
 test("leaving and returning clears only the affected answer and cancel restores stored answers",async ({page})=>{
   const writes=[];
   page.on("dialog", dialog => dialog.accept());

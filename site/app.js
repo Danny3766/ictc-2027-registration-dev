@@ -348,11 +348,15 @@ function currentEditPickup() {
 
 // An invalidated answer shows as unanswered, so leaving it unanswered is not a change.
 const validAnswer = (answer) => answer?.answer_valid === false ? null : answer;
-// Saving moves this survey out of the identity's reach, so the server will store 否 for it.
+// Saving a new identity this survey is not open to makes the server store 否 for it. When the old
+// identity could not answer it either, only a valid answer becomes 否. A missing identity counts as
+// general, so choosing general is no change.
 function editLeaves(kind) {
   const identity = currentEditIdentity();
-  return editMode && Boolean(identity) && identity !== queriedIdentityBaseline
-    && Meals.answersHosting(queriedIdentityBaseline ?? "general", kind) && !Meals.answersHosting(identity, kind);
+  const before = queriedIdentityBaseline ?? "general";
+  const stored = kind === "hosting" ? queriedHostingBaseline : queriedPickupBaseline;
+  return editMode && Boolean(identity) && identity !== before && !Meals.answersHosting(identity, kind)
+    && (Meals.answersHosting(before, kind) || Boolean(validAnswer(stored)));
 }
 function hasUnsavedChanges() {
   return Boolean(editMode && editStartChoices
