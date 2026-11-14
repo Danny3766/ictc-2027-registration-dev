@@ -408,7 +408,8 @@ function setAudienceOptions(editingId = null) {
 }
 
 // `only` redraws one table, so redrawing activities keeps unsaved input in the other forms.
-// A full redraw leaves the activity table alone while reordering, so the unsaved drag order stays.
+// Every redraw leaves the activity table alone while reordering, so the unsaved drag order stays;
+// setReordering(false) redraws it on the way out.
 function renderReferenceRows(only) {
   for (const [table, items, columns, form, transform] of [
     ["#activity-rows", reference.activities, ["title", "category", "starts_at", "is_published"], "#activity-form",
@@ -420,7 +421,7 @@ function renderReferenceRows(only) {
     ["#program-rows", reference.program, ["event_date", "start_time", "title", "is_visible"], "#program-form",
       (item) => ({ ...item, start_time: item.start_time?.slice(0, 5), end_time: item.end_time?.slice(0, 5) })],
   ]) {
-    if (only ? table !== only : table === "#activity-rows" && activitySection.classList.contains("reordering")) continue;
+    if ((only && table !== only) || (table === "#activity-rows" && activitySection.classList.contains("reordering"))) continue;
     const rows = document.querySelector(table);
     // A redraw after a save or reorder keeps the activities the user had expanded.
     const opened = new Set(Array.from(rows.querySelectorAll("details[open]"), (details) => details.closest("tr").dataset.id));
@@ -1258,7 +1259,8 @@ document.querySelector("#student-statistics-identity-form").addEventListener("su
   try {
     await api("save_reference", { kind: "student_statistics_identity", data: { code: form.elements.code.value || null } });
     reference = await api("list_reference");
-    renderStudentStatisticsIdentity();
+    // The reload can carry identity changes made elsewhere, so everything showing identities is redrawn.
+    redrawIdentities();
     if (document.querySelector("#district-stats-rows").children.length) await showStatistics();
     showMessage("學生統計身分已儲存。");
   } catch (error) { showMessage(error.message, true); }
@@ -1416,6 +1418,8 @@ function redrawIdentities() {
   renderSurveyIdentities(true);
   // Prices typed into an open activity form survive the redraw of its fields.
   renderIdentityPrices({ activity_identity_prices: identityPricesFrom(document.querySelector("#activity-form")) });
+  // Each activity's 費用 line names identities in 身分別 order.
+  renderReferenceRows("#activity-rows");
   renderNewRegistrationForm();
 }
 
@@ -1457,6 +1461,8 @@ identityCancelButton.addEventListener("click", () => {
 });
 
 function setReordering(on) {
+  // Not just !on: clearSession calls this before any reference is loaded, when there is nothing to redraw.
+  const leaving = !on && activitySection.classList.contains("reordering");
   // A drag still running would move a row that a redraw has already replaced.
   endDrag?.();
   activitySection.classList.toggle("reordering", on);
@@ -1464,6 +1470,8 @@ function setReordering(on) {
   reorderButton.classList.toggle("secondary", !on);
   cancelReorderButton.hidden = !on;
   document.querySelector("#reorder-hint").hidden = !on;
+  // Every way out draws fresh rows from reference: the saved or restored order, and identity changes made meanwhile.
+  if (leaving) return renderReferenceRows("#activity-rows");
   for (const button of activityRows.querySelectorAll("button:not(.drag-handle)")) button.disabled = on;
   // The details list is hidden while reordering; inert keeps its title from being a tab stop announced as
   // expanded, or toggled into a state nobody sees that reopens after 完成排序.
@@ -1491,7 +1499,6 @@ reorderButton.addEventListener("click", async () => {
       return showMessage(`${error.message}（重新載入失敗：${reloadError.message}）`, true);
     }
     setReordering(false);
-    renderReferenceRows("#activity-rows");
     renderNewRegistrationForm();
     return showMessage("活動清單已有變動，已重新載入，請再調整一次排序。", true);
   } finally {
@@ -1502,7 +1509,6 @@ reorderButton.addEventListener("click", async () => {
   const byId = new Map(reference.activities.map((item) => [item.id, item]));
   reference.activities = order.map((id, index) => ({ ...byId.get(id), sort_order: index + 1 }));
   setReordering(false);
-  renderReferenceRows("#activity-rows");
   renderNewRegistrationForm();
   // An open activity edit still holds the old sort_order and would undo this order when saved.
   const activityForm = document.querySelector("#activity-form");
@@ -1511,10 +1517,7 @@ reorderButton.addEventListener("click", async () => {
   showMessage("活動排序已儲存。");
 });
 
-cancelReorderButton.addEventListener("click", () => {
-  renderReferenceRows("#activity-rows");
-  setReordering(false);
-});
+cancelReorderButton.addEventListener("click", () => setReordering(false));
 
 for (const [sortRows, sortSection] of [[activityRows, activitySection], [identityRows, identitySection]]) {
   sortRows.addEventListener("pointerdown", (event) => {

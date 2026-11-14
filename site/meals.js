@@ -51,12 +51,19 @@ const Meals = (() => {
 
   function priceText(activity) {
     if (activity.activity_identity_prices) {
-      // Prices of identities nobody can pick anew are left out; 一般 is named only beside another price.
-      const others = activity.activity_identity_prices
-        .filter((price) => identities.some((item) => item.code === price.identity_code && selectable(item)))
-        .map((price) => `${identityLabels[price.identity_code]} NT$${price.fee_amount}／人`);
-      if (activity.fee_amount == null) return others.join("，");
-      return [`${identityLabels.general} NT$${activity.fee_amount}／人`, ...others].join("，");
+      // In 身分別 order; identities nobody can pick anew and unset prices are left out.
+      const prices = identities.filter(selectable).map((item) => ({ name: item.name, amount: fee(activity, item.code) }));
+      const free = prices.filter((price) => price.amount === 0).map((price) => price.name);
+      // 免費 alone only when every identity is priced 0: an unset price is not known to be free.
+      if (free.length && free.length === prices.length) return "免費";
+      // Identities sharing a price form one item where the first of them stands.
+      const paid = new Map();
+      for (const { name, amount } of prices) {
+        if (amount > 0) paid.set(amount, [...(paid.get(amount) ?? []), name]);
+      }
+      const parts = [...paid].map(([amount, names]) => `${names.join("、")} NT$${amount}／人`);
+      if (free.length) parts.push(`${free.join("、")}免費`);
+      return parts.join("，");
     }
     const prices = [];
     if (activity.fee_amount != null) prices.push(`${hasStudentPrice(activity) ? "一般 " : ""}NT$${activity.fee_amount}／人`);

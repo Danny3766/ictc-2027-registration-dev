@@ -816,6 +816,38 @@ test("identity reorder moves reserved and inactive identities, cancels and persi
   await expect(page.locator('#new-registration-form select[name="meal_identity"] option').filter({ hasText: "停用身分" })).toHaveCount(0);
 });
 
+test("an activity's 費用 follows the identity order once an activity reorder ends", async ({ page }) => {
+  const data = threeActivities.list_reference().json;
+  data.activities[1] = { ...data.activities[1], fee_amount: 100, activity_identity_prices: [
+    { identity_code: "student", fee_amount: 50 }, { identity_code: "child", fee_amount: 0 },
+  ] };
+  await mockStaff(page, "admin", () => {}, "測試登記", {
+    list_reference: () => ({ json: data }),
+    reorder_identities: () => ({ json: { success: true } }),
+  });
+  await login(page, "身分別");
+  const fee = page.locator('#activity-rows tr[data-id="2"] dl');
+  // Moves the first identity down one place and waits for the save and its redraw.
+  const moveFirstIdentityDown = async () => {
+    await page.locator("#reorder-identities").click();
+    await page.locator("#identity-rows .drag-handle").first().press("ArrowDown");
+    await page.locator("#reorder-identities").click();
+    await expect(page.locator("#reorder-identities")).toHaveText("調整排序");
+  };
+  await expect(fee).toContainText("一般 NT$100／人，學生 NT$50／人，兒童（國小）免費");
+  await moveFirstIdentityDown();
+  await expect(fee).toContainText("學生 NT$50／人，一般 NT$100／人，兒童（國小）免費");
+  // While the activities are being reordered their rows wait, then redraw on 取消.
+  await go(page, "活動");
+  await page.getByRole("button", { name: "調整排序" }).click();
+  await go(page, "身分別");
+  await moveFirstIdentityDown();
+  await expect(fee).toContainText("學生 NT$50／人，一般 NT$100／人");
+  await go(page, "活動");
+  await page.locator("#cancel-reorder").click();
+  await expect(fee).toContainText("一般 NT$100／人，學生 NT$50／人，兒童（國小）免費");
+});
+
 for (const status of [503, 409]) {
   test(`identity reorder handles ${status} without losing a retry or stale-list recovery`, async ({ page }) => {
     let attempts = 0;
@@ -2233,6 +2265,8 @@ test("admin selects a custom student identity for every activity and district, t
   await expect(select.locator("option")).toHaveText(["未指定", "學生"]);
   await select.selectOption("identity_new");
   await form.getByRole("button", { name: "儲存學生統計身分" }).click();
+  // The save redraws everything showing identities; a failing redraw would replace this message.
+  await expect(page.locator("#message")).toHaveText("學生統計身分已儲存。");
   await expect(select).toHaveValue("identity_new");
   expect(writes[0]).toEqual({ kind: "student_statistics_identity", data: { code: "identity_new" } });
   await go(page, "統計與匯出");

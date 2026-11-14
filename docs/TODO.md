@@ -1,39 +1,39 @@
 # ICTC 2027 登記系統 TODO
 
-> 更新日期：2026-11-13。已完成並發布的項目已刪除，過程與結果見 [驗收紀錄](驗收紀錄.md)、[需求討論與決策紀錄](需求討論與決策紀錄.md) 與 git 歷史。
+> 更新日期：2026-11-14。已完成並發布的項目已刪除，過程與結果見 [驗收紀錄](驗收紀錄.md)、[需求討論與決策紀錄](需求討論與決策紀錄.md) 與 git 歷史。
 
 ## 目前狀態
 
 | 環境 | 前端 | 資料庫 migration | Edge Function |
 | --- | --- | --- | --- |
 | 正式站 | `main`，PR #41（2026-11-08） | 套用至 `202611070001` | `staff` 為 2026-11-08 版 |
-| 測試站 | `develop`，PR #56（2026-11-12） | 確定套用至 `202611100004`（2026-11-10）；`202611110001`～`202611110004` 未記錄 | `staff` 為 2026-11-10 版之後未記錄 |
+| 測試站 | `develop`，PR #58（2026-11-13） | 確定套用至 `202611100004`（2026-11-10）；`202611110001`～`202611110004` 未記錄 | `staff` 為 2026-11-10 版之後未記錄 |
 
-`develop` 比 `main` 多 PR #42～#56，正式站下一次發布要一起帶上。
+`develop` 比 `main` 多 PR #42～#58，正式站下一次發布要一起帶上。
 
-## 進行中：名單身分篩選與學生統計（`fix/identity-filter-order`）
+## 進行中：免費身分的費用文字（`feat/free-identity-price-text`）
 
-- [x] 從 `origin/develop` 建立 `fix/identity-filter-order`，先記錄 Q1～Q10，見 [需求討論與決策紀錄](需求討論與決策紀錄.md) 及 [用餐身分管理](用餐身分管理.md)「名單身分篩選」。
-- [x] 實作依排序的多選篩選、「未填身分」，並調整 staff Edge Function 的 `meal_identities` 篩選。手機版清單原位展開，不遮住「搜尋」。
-- [x] 本機驗證：`staff`、`identities`、`survey-identities`、`read-only` 四個測試檔在桌機／手機 Chromium 與 WebKit 共 570 項通過、18 項既有略過；staff helpers 單元測試 13 項通過。PostgREST 篩選尚未對真實資料庫驗證，於測試站驗收。
-- [x] 指定學生身分統計：Q1～Q16 已確認，先記錄於[需求討論與決策紀錄](需求討論與決策紀錄.md)，再實作。
-- [x] 後台身分別設定單一學生統計身分；未指定提醒、停用保留、清除與刪除保護。
-- [x] 「各活動」依指定身分統計且與價格無關；「各區」新增學生人數與合計，同步統計 CSV，維持兒童與報名登記 CSV。
-- [x] 本機隔離 PostgreSQL 17 套用 `202611130001_student_statistics_identity.sql`；`verify-student-statistics-identity.sql` 以 `postgres` 與 `service_role` 執行通過並回滾。後台相關測試在桌機／手機 Chromium 與 WebKit 通過。
-- [ ] 測試站部署：`202611130001_student_statistics_identity.sql` → `verify-student-statistics-identity.sql` → staff Edge Function → 前端。驗收名單身分篩選（含 PostgREST 篩選）與學生統計，再由管理員指定學生統計身分；首次部署不自動指定。
+- [x] 從 `origin/develop` 建立分支，先記錄決策於[需求討論與決策紀錄](需求討論與決策紀錄.md)及[用餐身分管理](用餐身分管理.md)「免費身分的費用文字」。
+- [x] 修改 `site/meals.js` 的 `priceText()`：填 0 的身分合併於句尾寫「免費」，全部已設定且為 0 時只寫「免費」；同價收費身分合併（Q7 修訂）；各身分改依身分別排序列出，不再依 API 回傳順序。
+- [x] `site/admin/staff.js`：儲存或排序身分別後重畫活動列表，費用文字跟著更新；活動排序中則在完成或取消排序時重畫。`tests/staff.spec.mjs` 補對應測試，桌機／手機 Chromium 與 WebKit 通過。
+- [x] `scripts/identity-pricing.test.mjs` 補合併免費、同價合併、全部免費、一般填 0、留空、一般不在第一位、停用身分與後台限定身分案例，8 項通過。`read-only`、`staff`、`identities` 在 desktop-chromium 共 139 項，整批執行有時全過，有時 `staff.spec.mjs`「the 身分別 checklist filters by several identities…」版面檢查的 `boundingBox()` 拿到 null 而失敗；該項單獨重跑 5 次皆通過，修改前已有此現象，與本次修改無關。
+- [ ] 送 PR 至 `develop`，測試站只需發布前端，驗收公開頁與後台活動詳情的費用文字。
 
 ## 測試站：補齊部署並驗收
 
-前端已更新到 PR #56，以下確認後端跟上。
+前端已更新到 PR #58，以下確認後端跟上。
 
+- [ ] 名單身分篩選與學生統計（PR #57）：依序套用 `202611130001_student_statistics_identity.sql` → `verify-student-statistics-identity.sql` → staff Edge Function。驗收名單身分篩選（含 PostgREST 篩選）與學生統計，再由管理員指定學生統計身分；首次部署不自動指定。staff Edge Function 更新前，舊版會忽略名單身分篩選並回傳整份名單，不要據此驗收。本機驗證結果見[用餐身分管理](用餐身分管理.md)「指定學生身分統計」「名單身分篩選」。
 - [ ] 確認測試專案已依序套用 `202611110001_staff_performance.sql`、`202611110002_conference_import_status.sql`、`202611110003_survey_identities.sql`、`202611110004_identity_reorder.sql`，並部署 `develop` 上的 `registration`、`staff` Edge Function；未套用的依序補上。`202611110003` 前先關閉登記，完成後恢復原開放狀態。每支套用後執行對應的 `verify-staff-performance.sql`、`verify-conference-import-status.sql`、`verify-survey-identities.sql`、`verify-identity-reorder.sql`。結果記在[驗收紀錄](驗收紀錄.md)。
 - [ ] 在測試專案執行尚未留紀錄的驗證腳本：`verify-child-registration.sql`、`verify-child-type.sql`、`verify-registration-identities.sql`、`verify-independent-identity-prices.sql`、`verify-unified-identity.sql`。
-- [ ] 請專案負責人與弟兄們驗收 PR #43～#56 的功能，各項細節見對應文件：
+- [ ] 請專案負責人與弟兄們驗收 PR #43～#58 的功能，各項細節見對應文件：
   - 兒童報名、兒童類型與親子對應、名單兒童條件：[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-09 兒童報名」「兒童類型」。
   - 身分別管理、各身分價格、統一身分別、身分標籤、拖拉排序：[用餐身分管理](用餐身分管理.md)。
   - 接待題依身分開放、藍色提醒區塊、查詢結果外框：[接待身分設定](接待身分設定.md)。
   - 活動影響大會匯入狀態：[大會匯入狀態驗證](大會匯入狀態驗證.md)。
   - 後台效能與身分別區塊、公開表單缺漏欄位提示。
+  - 名單身分篩選、指定學生身分統計（PR #57，後端部署後驗收）：[用餐身分管理](用餐身分管理.md)。
+  - 公開查詢頁修改時鎖定查詢欄位、漏選活動紅框（PR #58）：[需求討論與決策紀錄](需求討論與決策紀錄.md)「2026-11-13 公開查詢頁修改時鎖定查詢欄位」「2026-11-13 公開頁漏選活動的紅框提示」。
 - [ ] 確認兒童類型標籤色碼（學齡前粉色底、國小粉藍底）。
 
 ## 正式站：下一次發布（`develop` → `main`）
