@@ -73,6 +73,16 @@ export function validDistrictFilter(value) {
   return value === undefined || value === null || (Number.isSafeInteger(value) && value > 0);
 }
 
+export function validImportStatusFilter(value) {
+  return value === undefined || ["needs_action", "pending", "reimport_needed", "imported"].includes(value);
+}
+
+// 待處理 is the active rows still to import; a single status keeps the list's void rows too.
+export function filterImportStatus(query, status) {
+  if (status === "needs_action") return query.eq("record_status", "active").in("import_status", ["pending", "reimport_needed"]);
+  return status ? query.eq("import_status", status) : query;
+}
+
 function projectKey(name, fallback) {
   try {
     return JSON.parse(Deno.env.get(name) ?? "{}").default ?? Deno.env.get(fallback);
@@ -261,6 +271,7 @@ export async function handler(request) {
     if (body.meal_identity !== undefined || body.children_only !== undefined) return response({ error: "INVALID_REQUEST" }, 400);
     if (identities !== undefined && (!Array.isArray(identities) || identities.length === 0 || identities.length > 100
       || !identities.every(validMealIdentity))) return response({ error: "INVALID_REQUEST" }, 400);
+    if (!validImportStatusFilter(body.import_status)) return response({ error: "INVALID_REQUEST" }, 400);
     let query = database.from("registrations")
       .select("id,serial_no,full_name,district_id,record_status,import_status,created_at,updated_at,meal_identity,is_child,child_type,parent_name,name_key"
         + (beforeSerial !== null || !body.summary ? ",registration_choices(activity_id,attending),registration_hosting(status,guest_type,guest_count,answer_valid),registration_pickup(status,count,answer_valid)" : ""),
@@ -276,6 +287,7 @@ export async function handler(request) {
         : query.ilike("name_key", `%${nameKey(body.search).replaceAll(/[%*,()]/g, "").replaceAll(/[\\_]/g, "\\$&")}%`);
     }
     if (body.district_id != null) query = query.eq("district_id", body.district_id);
+    query = filterImportStatus(query, body.import_status);
     if (identities) {
       const codes = identities.filter((code) => code !== null);
       // validMealIdentity limits codes to [a-z0-9_-], so they are safe inside the or() filter text.

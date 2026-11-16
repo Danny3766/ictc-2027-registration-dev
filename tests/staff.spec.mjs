@@ -141,6 +141,30 @@ test("slim list loads detail on demand and save reuses canonical data without re
   await expect(page.locator('#edit-registration-form [name="meal_identity"]')).toHaveValue("student");
 });
 
+// A save can move an imported record to 需重新匯入, so a list filtered by import status recounts.
+test("saving under the import status filter recounts the list", async ({ page }) => {
+  const lists = [];
+  const person = { id: "223e4567-e89b-42d3-a456-426614174000", serial_no: 1, full_name: "測試登記", district_id: 1,
+    record_status: "active", import_status: "imported", meal_identity: "general", registration_choices: [], children: [] };
+  await mockStaff(page, "staff", (body) => { if (body.action === "list_registrations") lists.push(body); }, "測試登記", {
+    list_registrations: () => ({ json: { count: 1, registrations: [person] } }),
+    get_registration: () => ({ json: { registration: person } }),
+    save_registration: () => ({ json: { success: true, registration: { ...person, import_status: "reimport_needed" } } }),
+  });
+  await login(page);
+  await page.locator('#search-form select[name="import_status"]').selectOption("imported");
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.at(-1)?.import_status).toBe("imported");
+  await page.getByRole("button", { name: "查看／處理" }).click();
+  await page.getByRole("button", { name: "修改登記資料" }).click();
+  const before = lists.length;
+  await page.getByRole("button", { name: "儲存登記" }).click();
+  await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
+  await expect.poll(() => lists.length).toBe(before + 1);
+  expect(lists.at(-1)).toMatchObject({ import_status: "imported" });
+  expect(lists.at(-1).skip_count).toBeUndefined();
+});
+
 test("a slower earlier detail load cannot replace or fail the record opened after it", async ({ page }) => {
   const people = ["甲", "乙"].map((full_name, index) => ({ id: `${index + 3}23e4567-e89b-42d3-a456-426614174000`, serial_no: index + 1,
     full_name, district_id: 1, record_status: "active", import_status: "pending", registration_choices: [], updated_at: "2026-11-04T00:00:00Z" }));
@@ -1296,6 +1320,40 @@ test("the registration list shows 10 rows a page and names the import column 匯
   await expect(page.locator("#page-number")).toHaveText("第 2 頁");
   await expect(page.locator("#next-page")).toBeDisabled();
   expect(pages).toEqual([0, 1]);
+});
+
+test("the import status filter combines with list conditions, survives paging, and clears", async ({ page }) => {
+  const lists = [];
+  await mockStaff(page, "staff", (payload) => {
+    if (payload.action === "list_registrations" && payload.before_serial === undefined) lists.push(payload);
+  }, "測試登記", {
+    list_registrations: () => ({ json: { count: 11, registrations: [] } }),
+  });
+  await login(page);
+  const form = page.locator("#search-form");
+  const status = form.locator('select[name="import_status"]');
+  const clear = page.getByRole("button", { name: "清除條件" });
+  await expect(status.locator("option")).toHaveText(["全部", "待處理", "待匯入", "需重新匯入", "已匯入"]);
+  await expect(status).toHaveValue("");
+  await status.selectOption("needs_action");
+  await expect(clear).toBeEnabled();
+  await form.locator('input[name="search"]').fill("王");
+  await form.locator('select[name="district_id"]').selectOption("1");
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.length).toBe(2);
+  await page.locator("#next-page").click();
+  await expect.poll(() => lists.length).toBe(3);
+  expect(lists.at(-1)).toMatchObject({ page: 1, search: "王", district_id: 1, import_status: "needs_action" });
+
+  await status.selectOption("reimport_needed");
+  await page.getByRole("button", { name: "搜尋" }).click();
+  await expect.poll(() => lists.length).toBe(4);
+  expect(lists.at(-1)).toMatchObject({ page: 0, import_status: "reimport_needed" });
+  await clear.click();
+  await expect.poll(() => lists.length).toBe(5);
+  expect(lists.at(-1)).toEqual({ action: "list_registrations", summary: true, page: 0, search: "" });
+  await expect(status).toHaveValue("");
+  await expect(clear).toBeDisabled();
 });
 
 test("the registration list filters by 區 together with the name, keeps both while paging, and 清除條件 clears them", async ({ page }) => {

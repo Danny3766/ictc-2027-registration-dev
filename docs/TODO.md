@@ -61,7 +61,7 @@
 
 - [ ] 依 9-3 關閉登記，通知服事者。
 - [ ] 留底：後台下載報名登記 CSV 與統計 CSV，執行 `supabase/testing/compare-preserved-registrations.sql` 並記下結果（只有筆數與 md5，不含姓名）。結果留在本機，[驗收紀錄](驗收紀錄.md)只寫兩次是否相同，不寫筆數。
-- [ ] 正式專案依序套用 `202611090001`～`202611150001` 共 14 支 migration，每支記在[正式環境設定流程](正式環境setup.md)第 3 節。任一支失敗就停下，保持關閉登記。
+- [ ] 正式專案在 SQL Editor 執行一次合併檔 `supabase/production/release_202611150001.sql`，內容是 `202611090001`～`202611150001` 共 14 支 migration 包成單一交易，在[正式環境設定流程](正式環境setup.md)第 3 節記一列。失敗時整份回滾，停下來並保持關閉登記。合併檔已在本機從 `main` 結構驗證：套用後的結構與資料和逐支套用完全相同，既有登記不變。
 - [ ] 執行 `supabase/testing/preview-hosting-general-only.sql`（唯讀；`main` 的結構沒有它用到的 `is_child` 與 `registration_identities`，所以排在套用 migration 之後），請專案負責人確認學生身分登記的接待答案，並認出其實是國小或學齡前的學生，這些登記改成兒童後開家、接機會變成「否」（2026-11-15 Q24）。結果含個資，不貼到 repo、PR 或對話。
 - [ ] 部署 `registration` 與 `staff` Edge Function，Verify JWT 依第 5 節設定。
 - [ ] 以 **Create a merge commit** 合併 `develop` → `main`，依 7-4、8 節核對，結果記在[驗收紀錄](驗收紀錄.md)。

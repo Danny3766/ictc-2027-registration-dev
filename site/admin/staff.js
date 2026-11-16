@@ -14,6 +14,7 @@ let count = 0;
 let search = "";
 // The 區 filter's district id as the select gives it; "" means every district.
 let district = "";
+let importStatus = "";
 // The applied 身分別 codes, "" for 未填身分; empty means 全部身分, with no identity condition.
 let identityFilter = [];
 let visibleRegistrations = [];
@@ -158,7 +159,7 @@ function clearSession() {
   // The list's conditions belong to this login too.
   document.querySelector("#search-form").reset();
   syncIdentityFilter();
-  [page, search, district, identityFilter] = [0, "", "", []];
+  [page, search, district, identityFilter, importStatus] = [0, "", "", [], ""];
   document.querySelector("#clear-search").disabled = true;
   for (const selector of ["#registration-rows", "#staff-rows", "#stats-rows", "#district-stats-rows", "#district-activity-cards",
     "#hosting-status-stats-rows", "#hosting-capacity-stats-rows"]) {
@@ -573,7 +574,7 @@ async function saveReference(event, kind) {
 
 async function loadRegistrations(recount = true) {
   const result = await api("list_registrations", { page, search, summary: true, ...(!recount && { skip_count: true }), ...(district && { district_id: Number(district) }),
-    ...(identityFilter.length && { meal_identities: identityFilter.map((code) => code || null) }) });
+    ...(identityFilter.length && { meal_identities: identityFilter.map((code) => code || null) }), ...(importStatus && { import_status: importStatus }) });
   count = result.count ?? count;
   document.querySelector("#registration-count").textContent = `共 ${count} 筆`;
   document.querySelector("#page-number").textContent = `第 ${page + 1} 頁`;
@@ -1109,9 +1110,10 @@ function showParentChildren(registration) {
 // The list switches to a search for the child's serial number, so the record stays open after a save;
 // 清除條件 brings the full list back.
 async function openChildRegistration(serial) {
-  if (!await showRegistrations(0, String(serial), "", [])) return;
+  if (!await showRegistrations(0, String(serial), "", [], "")) return;
   searchForm.elements.search.value = String(serial);
   searchForm.elements.district_id.value = "";
+  searchForm.elements.import_status.value = "";
   setIdentityFilter([]);
   updateClearSearch();
   const child = visibleRegistrations.find((item) => item.serial_no === serial);
@@ -1130,7 +1132,7 @@ async function loadRegistrationDetail(registration) {
 
 // After a save the caller already shows the saved record, and only a filter can change the count.
 async function refreshRegistration(saved) {
-  await loadRegistrations(!saved || Boolean(search || district || identityFilter.length));
+  await loadRegistrations(!saved || Boolean(search || district || identityFilter.length || importStatus));
   const updated = visibleRegistrations.find((item) => item.id === selectedRegistration?.id);
   if (!updated) document.querySelector("#registration-detail").hidden = true;
   else if (!saved) await loadRegistrationDetail(updated);
@@ -1697,15 +1699,15 @@ document.querySelector("#close-staff-editor").addEventListener("click", () => {
 });
 
 // A failed load keeps the previous page and conditions, so the controls match the rows on screen.
-async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district, nextIdentityFilter = identityFilter) {
-  const previous = [page, search, district, identityFilter];
-  [page, search, district, identityFilter] = [nextPage, nextSearch, nextDistrict, nextIdentityFilter];
+async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district, nextIdentityFilter = identityFilter, nextImportStatus = importStatus) {
+  const previous = [page, search, district, identityFilter, importStatus];
+  [page, search, district, identityFilter, importStatus] = [nextPage, nextSearch, nextDistrict, nextIdentityFilter, nextImportStatus];
   try {
     await loadRegistrations();
     return true;
   } catch (error) {
     // A 401 has already logged out and cleared the conditions; restoring them would hand them to the next login.
-    if (session) [page, search, district, identityFilter] = previous;
+    if (session) [page, search, district, identityFilter, importStatus] = previous;
     showMessage(error.message, true);
     return false;
   } finally {
@@ -1742,9 +1744,9 @@ function syncIdentityFilter() {
 }
 // Enabled while either the typed or the applied conditions are set, so a filter typed away but still on the list can be cleared.
 function updateClearSearch() {
-  document.querySelector("#clear-search").disabled = !search && !district && !identityFilter.length
+  document.querySelector("#clear-search").disabled = !search && !district && !identityFilter.length && !importStatus
     && !searchForm.elements.search.value.trim() && !searchForm.elements.district_id.value
-    && !enteredIdentityFilter().length;
+    && !enteredIdentityFilter().length && !searchForm.elements.import_status.value;
 }
 // Registered before updateClearSearch, so it sees the boxes 全部身分 has just ticked or cleared.
 searchForm.addEventListener("input", (event) => {
@@ -1767,16 +1769,17 @@ searchForm.addEventListener("submit", (event) => {
   // Nothing ticked searches 全部身分, and the boxes say so.
   const identities = enteredIdentityFilter();
   setIdentityFilter(identities);
-  showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value, identities);
+  showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value, identities, searchForm.elements.import_status.value);
 });
 document.querySelector("#clear-search").addEventListener("click", async () => {
-  const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value, enteredIdentityFilter()];
+  const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value, enteredIdentityFilter(), searchForm.elements.import_status.value];
   searchForm.reset();
   syncIdentityFilter();
   // A failed load keeps the conditions from before the click, in the fields as well as on the list.
-  if (!await showRegistrations(0, "", "", []) && session) {
+  if (!await showRegistrations(0, "", "", [], "") && session) {
     [searchForm.elements.search.value, searchForm.elements.district_id.value] = entered;
     setIdentityFilter(entered[2]);
+    searchForm.elements.import_status.value = entered[3];
     updateClearSearch();
   }
 });

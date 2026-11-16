@@ -37,7 +37,7 @@ textarea { width: 100%; min-height: 6rem; padding: .65rem .75rem; border: 1px so
 .inline-form { grid-template-columns: minmax(0, 1fr) auto; align-items: end; max-width: 40rem; }
 .inline-form > button { margin-top: 0; }
 #student-statistics-identity-form { margin-bottom: 1.5rem; }
-#search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 10rem) minmax(0, 13rem) auto auto; max-width: 56rem; }
+#search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 9rem) minmax(0, 11rem) minmax(0, 10rem) auto auto; max-width: none; }
 /* A select renders a little shorter than an input; filling the row keeps both labels and boxes level. */
 #search-form > label, .identity-filter { align-self: stretch; grid-template-rows: auto 1fr; }
 /* The 身分別 multi-select: a box styled like the other selects that opens a checklist over the rows below. */
@@ -220,6 +220,9 @@ tr.dragging .drag-handle { cursor: grabbing; }
 .status-imported { color: #1d5a3f; background: #e3f2ea; }
 .status-pending { color: #654c00; background: #fff4d8; }
 
+@media (max-width: 67rem) {
+  #search-form { grid-template-columns: minmax(0, 1fr) minmax(0, 9rem) minmax(0, 11rem) minmax(0, 10rem); }
+}
 @media (max-width: 42rem) {
   .inline-form { grid-template-columns: 1fr; }
   /* Fields stack; 搜尋 and 清除條件 share the last row. */

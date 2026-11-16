@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validChild, childrenByParent, attachRegistrationChildren } from "./index.ts";
+import { readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validImportStatusFilter, filterImportStatus, validChild, childrenByParent, attachRegistrationChildren } from "./index.ts";
 
 test("JSON bodies enforce the byte limit while reading", async () => {
   const payload = '"' + "a".repeat(63_998) + '"';
@@ -92,6 +92,20 @@ test("a meal identity is left out, null, or a well-formed code; the database che
 test("the registration list's district filter is left out, null, or a positive integer id", () => {
   for (const value of [undefined, null, 1, 4]) assert.equal(validDistrictFilter(value), true);
   for (const value of [0, -1, 1.5, "1", "", NaN, Infinity, 2 ** 53, true, {}, [1]]) assert.equal(validDistrictFilter(value), false);
+});
+
+test("the import status filter accepts 待處理 or one status, and 待處理 leaves out void rows", () => {
+  for (const value of [undefined, "needs_action", "pending", "reimport_needed", "imported"]) assert.equal(validImportStatusFilter(value), true);
+  for (const value of [null, "", "PENDING", "void", 1, ["pending"], {}]) assert.equal(validImportStatusFilter(value), false);
+  const calls = (status) => {
+    const seen = [];
+    const query = { eq: (...args) => (seen.push(["eq", ...args]), query), in: (...args) => (seen.push(["in", ...args]), query) };
+    assert.equal(filterImportStatus(query, status), query);
+    return seen;
+  };
+  assert.deepEqual(calls(undefined), []);
+  assert.deepEqual(calls("imported"), [["eq", "import_status", "imported"]]);
+  assert.deepEqual(calls("needs_action"), [["eq", "record_status", "active"], ["in", "import_status", ["pending", "reimport_needed"]]]);
 });
 
 test("a child needs a parent name of 1 to 20 characters; any other child type is refused", () => {

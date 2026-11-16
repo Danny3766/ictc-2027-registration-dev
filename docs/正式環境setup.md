@@ -349,7 +349,7 @@ feat/*（功能開發） → PR → develop（整合，不部署） → PR → m
 更新內容包含 migration 或 Edge Function 時，新舊版本會有一段不一致的空窗，依序執行：
 
 1. 通知服事者「正式站維護中，暫停登記」，在後台網站設定關閉登記（`is_registration_open = false`）。
-2. 在正式專案的 SQL Editor 逐支執行新的 migration，每支在第 3 節的表格新增一列。
+2. 在正式專案的 SQL Editor 逐支執行新的 migration，每支在第 3 節的表格新增一列。一次累積多支時，可改執行 `supabase/production/release_<最後一支編號>.sql` 合併檔，產生方式與 baseline 相同，在第 3 節記一列。
 3. 重新部署有變更的 Edge Function。
 4. 合併 `develop` → `main` 的 PR，等前端部署完成。
 5. 依第 7-4、8 節核對，並驗收這次的變更。
