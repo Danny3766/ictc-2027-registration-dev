@@ -1545,9 +1545,9 @@ test("CSV adds the hosting and meal columns", async ({ page }, testInfo) => {
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
   const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
-  expect(lines[0]).toMatch(/"開家接待","接待對象","可接待人數","是否可以接機","可接機人數","用餐身分","預估應付餐費","餐費未計入的活動"$/);
-  expect(lines[1]).toMatch(/"是","弟兄","2","是","1","","未設定","測試聚會"$/);
-  expect(lines[2]).toMatch(/"是","夫婦","4","","","","未設定","測試聚會"$/);
+  expect(lines[0]).toMatch(/"開家接待","接待對象","可接待人數","是否可以接機","可接機人數","用餐身分","預估應付餐費","餐費計入的活動"$/);
+  expect(lines[1]).toMatch(/"是","弟兄","2","是","1","","未設定",""$/);
+  expect(lines[2]).toMatch(/"是","夫婦","4","","","","未設定",""$/);
   expect(lines[3]).toMatch(/"家人已登記開家接待","","","是","2","","0",""$/);
   expect(lines[4]).toMatch(/"未回覆","","","否","0","","0",""$/);
 });
@@ -1799,12 +1799,28 @@ test("CSV shows the meal identity only where it is needed, and the fee by identi
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
   const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
-  expect(lines[0]).toMatch(/"用餐身分","預估應付餐費","餐費未計入的活動"$/);
-  expect(lines[1]).toMatch(/^"4","甲",.*,"學生","130",""$/);
-  expect(lines[2]).toMatch(/^"3","乙",.*,"未回覆","未設定","測試限定午餐、測試晚餐"$/);
-  expect(lines[3]).toMatch(/^"2","丙",.*,"一般","100",""$/);
+  expect(lines[0]).toMatch(/"用餐身分","預估應付餐費","餐費計入的活動"$/);
+  expect(lines[1]).toMatch(/^"4","甲",.*,"學生","130","測試限定午餐、測試晚餐"$/);
+  expect(lines[2]).toMatch(/^"3","乙",.*,"未回覆","未設定",""$/);
+  expect(lines[3]).toMatch(/^"2","丙",.*,"一般","100","測試晚餐"$/);
   // 丁's stored identity is left from a removed student price, so it is not needed and stays blank.
-  expect(lines[4]).toMatch(/^"1","丁",.*,"","未設定","測試聚會"$/);
+  expect(lines[4]).toMatch(/^"1","丁",.*,"","未設定",""$/);
+});
+
+test("registration CSV leaves activities with a fee of 0 out of 餐費計入的活動", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const replies = mealReplies();
+  await mockStaff(page, "staff", () => {}, "測試登記", { ...replies, list_reference: () => {
+    const result = replies.list_reference();
+    result.json.activities = result.json.activities.map((item) => item.id === 1
+      ? { ...item, activity_identity_prices: [{ identity_code: "student", fee_amount: 0 }] } : item);
+    return result;
+  } });
+  await login(page, "統計與匯出");
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
+  const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
+  expect(lines[1]).toMatch(/^"4","甲",.*,"學生","60","測試晚餐"$/);
 });
 
 test("the activity form saves prices, cost and audience, and confirms restricting one with outside sign-ups", async ({ page }) => {

@@ -854,20 +854,20 @@ async function downloadStatisticsCsv() {
 }
 
 // What this person pays for the attended activities, by their identity. The CSV keeps it a number, the
-// set fees' sum, and names the activities left out in the next column.
+// set fees' sum, and names the activities that add to it (fee above 0) in the next column.
 const personFee = (registration, activities) => {
   const attended = activities.filter((activity) => attends(registration, activity));
   const fees = attended.map((activity) => Meals.fee(activity, registration.meal_identity));
-  const { sum, known } = Meals.addFees(fees);
-  const unsetTitles = attended.filter((_, index) => fees[index] == null).map((activity) => activity.title);
-  return [known || !unsetTitles.length ? sum : "未設定", unsetTitles.join("、")];
+  const { sum, known, missing } = Meals.addFees(fees);
+  const paidTitles = attended.filter((_, index) => fees[index] > 0).map((activity) => activity.title);
+  return [known || !missing ? sum : "未設定", paidTitles.join("、")];
 };
 
 async function downloadCsv() {
   const activities = currentActivities();
   const districts = new Map(reference.districts.map((item) => [item.id, item.name]));
   const rows = [["流水號", "姓名", "區", "兒童", "家長姓名", "匯入狀態", ...activities.map((item) => item.title),
-    "開家接待", "接待對象", "可接待人數", "是否可以接機", "可接機人數", "用餐身分", "預估應付餐費", "餐費未計入的活動"]];
+    "開家接待", "接待對象", "可接待人數", "是否可以接機", "可接機人數", "用餐身分", "預估應付餐費", "餐費計入的活動"]];
   for (const registration of activeRegistrations(await allRegistrations())) {
     const choices = new Map(registration.registration_choices.map((item) => [item.activity_id, item.attending]));
     const hosting = hostingOf(registration);
