@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { handler, readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validImportStatusFilter, filterImportStatus, validChild, childrenByParent, attachRegistrationChildren } from "./index.ts";
+import { handler, readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validAudience, validImportStatusFilter, filterImportStatus, validChild, childrenByParent, attachRegistrationChildren } from "./index.ts";
 
 test("JSON bodies enforce the byte limit while reading", async () => {
   const payload = '"' + "a".repeat(63_998) + '"';
@@ -92,6 +92,13 @@ test("a meal identity is left out, null, or a well-formed code; the database che
 test("the registration list's district filter is left out, null, or a positive integer id", () => {
   for (const value of [undefined, null, 1, 4]) assert.equal(validDistrictFilter(value), true);
   for (const value of [0, -1, 1.5, "1", "", NaN, Infinity, 2 ** 53, true, {}, [1]]) assert.equal(validDistrictFilter(value), false);
+});
+
+test("an activity audience is all, hosting, pickup or activity:<id>, as the database allows", () => {
+  for (const value of ["all", "hosting", "pickup", "activity:1", "activity:120"]) assert.equal(validAudience(value), true);
+  for (const value of [undefined, null, "", "Hosting", "activity:", "activity:0", "activity:01", "activity:1 ", "pickup\n", 1, ["all"]]) {
+    assert.equal(validAudience(value), false);
+  }
 });
 
 test("the import status filter accepts 待處理 or one status, and 待處理 leaves out void rows", () => {

@@ -80,6 +80,7 @@ async function mockStaff(page, role, onRequest = () => {}, registrationName = "�
       list_reference: { settings: { event_name: "測試", is_registration_open: false }, districts: [{ id: 1, name: "林森", sort_order: 1 }], activities: [{ id: 1, title: "測試聚會", is_published: true, fee_amount: 0 }], program: [] },
       list_registrations: { count: 1, registrations: [{ id: "223e4567-e89b-42d3-a456-426614174000", serial_no: 1, full_name: registrationName, district_id: 1, record_status: "active", import_status: "pending", meal_identity: "general", registration_choices: [{ activity_id: 1, attending: false }], updated_at: "2026-11-04T00:00:00Z" }] },
       list_staff: { staff: [] },
+      activity_audience_outside_count: { outside_count: 0 },
       save_registration: { success: true },
       save_reference: { saved: {} },
     }[action];
@@ -1943,14 +1944,22 @@ test("registration CSV leaves activities with a fee of 0 out of 餐費計入的�
 
 test("the activity form saves prices, cost and audience, and confirms restricting one with outside sign-ups", async ({ page }) => {
   const saved = [];
+  const previews = [];
+  const fullScans = [];
   const replies = mealReplies();
-  const open = { ...replies, list_reference: () => {
+  const open = { ...replies, activity_audience_outside_count: ({ activity_id, audience }) => {
+    previews.push({ activity_id, audience });
+    return { json: { outside_count: 1 } };
+  }, list_reference: () => {
     const result = replies.list_reference();
     result.json.activities = result.json.activities.map((item) => item.id === 1
       ? { ...item, audience: "all" } : item.id === 3 ? { ...item, is_published: false } : item);
     return result;
   } };
-  await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved.push(payload.data); }, "測試登記", open);
+  await mockStaff(page, "admin", (payload) => {
+    if (payload.action === "save_reference") saved.push(payload.data);
+    if (payload.action === "list_registrations" && payload.before_serial) fullScans.push(payload);
+  }, "測試登記", open);
   await login(page, "活動");
   const form = page.locator("#activity-form");
   await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).first().click();
@@ -1965,9 +1974,11 @@ test("the activity form saves prices, cost and audience, and confirms restrictin
   await form.locator('select[name="audience"]').selectOption("hosting");
   await form.locator('input[name="audience_note"]').fill("限有開家接待的家庭");
 
-  // 乙 signed up and has no hosting answer, so restricting the lunch leaves one sign-up outside it.
+  // The server counts one sign-up outside the new audience; the page no longer downloads the full list for it.
   await form.getByRole("button", { name: /^儲存活動/ }).click();
   expect(await answerConfirm(page, false)).toContain("目前有 1 位不符對象的人已報名此活動，他們的報名會保留。");
+  expect(previews).toEqual([{ activity_id: 1, audience: "hosting" }]);
+  expect(fullScans).toHaveLength(0);
   expect(saved).toHaveLength(0);
   await form.getByRole("button", { name: /^儲存活動/ }).click();
   await answerConfirm(page);
@@ -3827,16 +3838,15 @@ test("a skipped count never shows fewer records than the rows on screen", async 
 });
 
 test("an activity audience check started before logout asks nothing afterwards", async ({ page }) => {
-  const attending = { ...loadingList("attending").registrations[0], registration_choices: [{ activity_id: 1, attending: true }] };
   await mockStaff(page, "admin", () => {}, "test", {
     ...threeActivities,
-    list_registrations: () => ({ json: { count: 1, registrations: [attending] } }),
+    activity_audience_outside_count: () => ({ json: { outside_count: 1 } }),
   });
   let hold = false;
   let held;
   await page.route("**/functions/v1/staff", async (route) => {
     const body = route.request().postDataJSON();
-    if (hold && body.action === "list_registrations" && body.before_serial) { held = route; return; }
+    if (hold && body.action === "activity_audience_outside_count") { held = route; return; }
     await route.fallback();
   });
   await login(page, "活動");

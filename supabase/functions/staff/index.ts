@@ -74,6 +74,11 @@ export function validDistrictFilter(value) {
   return value === undefined || value === null || (Number.isSafeInteger(value) && value > 0);
 }
 
+// Same values as the activities_audience constraint.
+export function validAudience(value) {
+  return typeof value === "string" && /^(all|hosting|pickup|activity:[1-9][0-9]*)$/.test(value);
+}
+
 export function validImportStatusFilter(value) {
   return value === undefined || ["needs_action", "pending", "reimport_needed", "imported"].includes(value);
 }
@@ -435,6 +440,22 @@ export async function handler(request) {
       return response({ error: "排序儲存失敗" }, 503);
     }
     return response({ success: true });
+  }
+
+  if (body.action === "activity_audience_outside_count") {
+    if (!Number.isSafeInteger(body.activity_id) || body.activity_id < 1 || !validAudience(body.audience)) {
+      return response({ error: "INVALID_REQUEST" }, 400);
+    }
+    const { data, error } = await database.rpc("staff_activity_audience_outside_count", {
+      p_actor: profile.auth_user_id, p_activity_id: body.activity_id, p_audience: body.audience,
+    });
+    if (error) {
+      if (lostAccess(error)) return lostAccessResponse();
+      if (isInputError(error)) return response({ error: "INVALID_REQUEST" }, 400);
+      console.error("Failed to preview activity audience", error);
+      return response({ error: "活動報名對象檢查失敗" }, 503);
+    }
+    return response({ outside_count: data });
   }
 
   if (body.action === "save_reference") {

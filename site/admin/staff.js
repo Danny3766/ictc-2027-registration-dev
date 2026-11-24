@@ -628,10 +628,9 @@ async function saveReference(event, kind) {
     // People who signed up before the restriction keep their answer until their next save.
     let outside;
     try {
-      outside = activeRegistrations(await allRegistrations()).filter((registration) => attends(registration, edited)
-        && !Meals.eligible(data, { skipsHosting: !Meals.answersHosting(registration.meal_identity ?? "general"), skipsPickup: !Meals.answersHosting(registration.meal_identity ?? "general", "pickup"), hostingStatus: hostingOf(registration)?.status,
-          pickupStatus: pickupOf(registration)?.status, choices: registration.registration_choices,
-          activities: reference.activities })).length;
+      ({ outside_count: outside } = await api("activity_audience_outside_count", {
+        activity_id: edited.id, audience: data.audience,
+      }));
     } catch (error) { return showError(error); }
     if (outside && !await Ui.confirm(`目前有 ${outside} 位不符對象的人已報名此活動，他們的報名會保留。確定改為限定對象？`, "改為限定對象")) return;
   }
