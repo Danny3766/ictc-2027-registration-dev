@@ -762,21 +762,6 @@ async function loadRegistrations(recount = true, conditions = null, request = {}
   }
 }
 
-async function allRegistrations() {
-  const records = [];
-  let beforeSerial = Number.MAX_SAFE_INTEGER;
-  while (true) {
-    const { registrations } = await api("list_registrations", { page: 0, search: "", before_serial: beforeSerial });
-    records.push(...registrations);
-    if (registrations.length < 500) return records;
-    beforeSerial = registrations.at(-1).serial_no;
-  }
-}
-
-function activeRegistrations(registrations) {
-  return registrations.filter((item) => item.record_status === "active");
-}
-
 function currentActivities() {
   return reference.activities.filter((item) => item.is_published);
 }
@@ -969,14 +954,17 @@ function csvCell(value) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-function saveCsv(rows, filename) {
-  const csv = `\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`;
-  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+function downloadCsvBlob(parts, filename) {
+  const url = URL.createObjectURL(new Blob(parts, { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+function saveCsv(rows, filename) {
+  downloadCsvBlob([`\uFEFF${rows.map((row) => row.map(csvCell).join(",")).join("\r\n")}`], filename);
 }
 
 function appendStatisticsTable(rows, title, table, note = "") {
@@ -1020,24 +1008,45 @@ const personFee = (registration, activities) => {
 async function downloadCsv() {
   const activities = currentActivities();
   const districts = new Map(reference.districts.map((item) => [item.id, item.name]));
-  const rows = [["流水號", "姓名", "區", "兒童", "家長姓名", "匯入狀態", ...activities.map((item) => item.title),
-    "開家接待", "接待對象", "可接待人數", "是否可以接機", "可接機人數", "用餐身分", "預估應付餐費", "餐費計入的活動"]];
-  for (const registration of activeRegistrations(await allRegistrations())) {
-    const choices = new Map(registration.registration_choices.map((item) => [item.activity_id, item.attending]));
-    const hosting = hostingOf(registration);
-    const pickup = pickupOf(registration);
-    rows.push([
-      registration.serial_no, registration.full_name, districts.get(registration.district_id),
-      childLabel(registration.child_type), registration.parent_name ?? "",
-      label("import", registration.import_status),
-      ...activities.map((item) => !choices.has(item.id) ? "未回覆" : choices.get(item.id) ? "參加" : "不參加"),
-      hosting ? Hosting.statusLabels[hosting.status] : Meals.answersHosting(registration.meal_identity ?? "general") ? "未回覆" : "不適用",
-      hosting?.guest_type ? Hosting.guestLabels[hosting.guest_type] : "",
-      hosting?.guest_count ?? "", pickup ? Pickup.labels[pickup.status] : Meals.answersHosting(registration.meal_identity ?? "general", "pickup") ? "" : "不適用", pickup?.count ?? "",
-      identityText(registration, activities), ...personFee(registration, activities),
-    ]);
+  const header = ["流水號", "姓名", "區", "兒童", "家長姓名", "匯入狀態", ...activities.map((item) => item.title),
+    "開家接待", "接待對象", "可接待人數", "是否可以接機", "可接機人數", "用餐身分", "預估應付餐費", "餐費計入的活動"];
+  const parts = [`\uFEFF${header.map(csvCell).join(",")}`];
+  const generation = loginGeneration;
+  let beforeSerial = Number.MAX_SAFE_INTEGER;
+  while (true) {
+    const { registrations } = await api("list_registrations", { page: 0, search: "", before_serial: beforeSerial });
+    // Yield before 50 ms (a long task) so a large export keeps the page responsive.
+    let deadline = performance.now() + 40;
+    const lines = [];
+    for (const registration of registrations) {
+      if (registration.record_status !== "active") continue;
+      const choices = new Map(registration.registration_choices.map((item) => [item.activity_id, item.attending]));
+      const hosting = hostingOf(registration);
+      const pickup = pickupOf(registration);
+      const row = [
+        registration.serial_no, registration.full_name, districts.get(registration.district_id),
+        childLabel(registration.child_type), registration.parent_name ?? "",
+        label("import", registration.import_status),
+        ...activities.map((item) => !choices.has(item.id) ? "未回覆" : choices.get(item.id) ? "參加" : "不參加"),
+        hosting ? Hosting.statusLabels[hosting.status] : Meals.answersHosting(registration.meal_identity ?? "general") ? "未回覆" : "不適用",
+        hosting?.guest_type ? Hosting.guestLabels[hosting.guest_type] : "",
+        hosting?.guest_count ?? "", pickup ? Pickup.labels[pickup.status] : Meals.answersHosting(registration.meal_identity ?? "general", "pickup") ? "" : "不適用", pickup?.count ?? "",
+        identityText(registration, activities), ...personFee(registration, activities),
+      ];
+      lines.push(row.map(csvCell).join(","));
+      if (performance.now() >= deadline) {
+        if (globalThis.scheduler?.yield) await scheduler.yield();
+        else await new Promise((resolve) => setTimeout(resolve, 0));
+        // After a logout or another login, neither the next page nor the download belongs to whoever is on screen.
+        if (generation !== loginGeneration) return;
+        deadline = performance.now() + 40;
+      }
+    }
+    if (lines.length) parts.push("\r\n", lines.join("\r\n"));
+    if (registrations.length < 500) break;
+    beforeSerial = registrations.at(-1).serial_no;
   }
-  saveCsv(rows, "registration-export.csv");
+  downloadCsvBlob(parts, "registration-export.csv");
 }
 
 // A new registration answers every activity. An edit only has to keep existing answers:

@@ -276,6 +276,62 @@ test("CSV neutralizes spreadsheet formulas", async ({ page }, testInfo) => {
   expect(csv).toContain('"待匯入"');
 });
 
+// Newest first: the first export page holds 501 down to 2 (250 is void), the second holds 1.
+const exportRows = Array.from({ length: 501 }, (_, index) => {
+  const serial = 501 - index;
+  return { id: String(serial), serial_no: serial, full_name: `測試${serial}`, district_id: 1,
+    record_status: serial === 250 ? "void" : "active", import_status: "pending", meal_identity: "general",
+    registration_choices: [] };
+});
+const exportReplies = {
+  list_registrations: ({ before_serial }) => ({ json: before_serial === undefined
+    ? { count: exportRows.length, registrations: exportRows.slice(0, 1) }
+    : { registrations: before_serial === Number.MAX_SAFE_INTEGER ? exportRows.slice(0, 500) : exportRows.slice(500) } }),
+};
+// mockStaff also calls the reply itself for statistics, so cursors come from the requests sent.
+const exportCursors = (cursors) => ({ action, before_serial }) => {
+  if (action === "list_registrations" && before_serial !== undefined) cursors.push(before_serial);
+};
+
+test("registration CSV keeps order and skips void rows across export pages", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const cursors = [];
+  await mockStaff(page, "staff", exportCursors(cursors), "測試登記", exportReplies);
+  await login(page, "統計與匯出");
+  const download = page.waitForEvent("download");
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
+  const lines = (await readFile(await (await download).path(), "utf8")).split("\r\n");
+  expect(cursors).toEqual([Number.MAX_SAFE_INTEGER, 2]);
+  expect(lines).toHaveLength(501);
+  expect(lines[1]).toContain('"501","測試501"');
+  expect(lines.at(-1)).toContain('"1","測試1"');
+  expect(lines.some((line) => line.startsWith('"250","測試250"'))).toBe(false);
+});
+
+test("registration CSV export stops at its next pause after a logout", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop-chromium");
+  const cursors = [];
+  await mockStaff(page, "staff", exportCursors(cursors), "測試登記", exportReplies);
+  await login(page, "統計與匯出");
+  await page.evaluate(() => {
+    Object.assign(window, { savedCsv: 0, pauses: 0 });
+    downloadCsvBlob = () => { window.savedCsv++; };
+    // Every row runs past the time budget, and each pause waits for the test.
+    let now = 0;
+    performance.now = () => now += 100;
+    scheduler.yield = () => { window.pauses++; return new Promise((resolve) => { window.resumeExport = resolve; }); };
+  });
+  await page.getByRole("button", { name: "下載報名登記 CSV" }).click();
+  await expect.poll(() => page.evaluate(() => window.pauses)).toBe(1);
+  await page.locator("#logout-button").click();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  await page.evaluate(() => window.resumeExport());
+  await settle(page);
+  // A second pause would mean the export kept building rows for no one.
+  expect(await page.evaluate(() => [window.pauses, window.savedCsv])).toEqual([1, 0]);
+  expect(cursors).toEqual([Number.MAX_SAFE_INTEGER]);
+});
+
 for (const role of ["staff", "admin"]) {
   test(`${role} login loads only its permitted back-office sections`, async ({ page }) => {
     await mockStaff(page, role);
@@ -3700,8 +3756,8 @@ for (const [kind, button, action] of [
       await route.fallback();
     });
     await login(page, "統計與匯出");
-    await page.evaluate(() => { window.savedCsv = 0; saveCsv = () => { window.savedCsv++; }; });
-    // Without a logout the same button does deliver, which shows the replaced saveCsv is the one called.
+    await page.evaluate(() => { window.savedCsv = 0; downloadCsvBlob = () => { window.savedCsv++; }; });
+    // Without a logout the same button still reaches the download step.
     await page.getByRole("button", { name: button }).click();
     if (kind === "statistics") await expect(page.locator("#stats-rows tr")).not.toHaveCount(0);
     else await expect.poll(() => page.evaluate(() => window.savedCsv)).toBe(1);
