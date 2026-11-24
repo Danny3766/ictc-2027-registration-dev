@@ -21,6 +21,10 @@ let visibleRegistrations = [];
 let selectedRegistration;
 let editingRegistration = false;
 let detailRequest = 0;
+let registrationRequest = null;
+let registrationLoading = false;
+let loginGeneration = 0;
+let refreshing = null;
 // Must match the page size of list_registrations in the staff Edge Function.
 const REGISTRATIONS_PER_PAGE = 10;
 let editingStaff = null;
@@ -124,7 +128,15 @@ function showMessage(value, error = false, stay = error) {
   document.querySelector("#message-live").textContent = value;
   message.classList.toggle("error", error);
   toast.hidden = false;
-  if (!stay) messageTimer = setTimeout(hideMessage, 5000);
+  if (!stay) messageTimer = setTimeout(dismissMessage, 5000);
+}
+
+function dismissMessage() {
+  if (toast.contains(document.activeElement)) {
+    messageTimer = setTimeout(dismissMessage, 1000);
+    return;
+  }
+  hideMessage();
 }
 
 function hideMessage() {
@@ -134,7 +146,10 @@ function hideMessage() {
 document.querySelector("#message-close").addEventListener("click", hideMessage);
 
 function clearSession() {
+  loginGeneration++;
+  refreshing = null;
   detailRequest++;
+  registrationRequest = null;
   session = null;
   sessionStorage.removeItem(sessionKey);
   // The next person to sign in on this device starts at 登記名單.
@@ -150,6 +165,8 @@ function clearSession() {
   }
   document.querySelector("#staff-editor").hidden = true;
   editingStaff = null;
+  // An expired login ends any open confirmation as 取消: it asked about the previous person's data.
+  document.querySelector("dialog.confirm-dialog")?.close();
   document.querySelector("#new-registration-code").textContent = "";
   document.querySelector("#new-registration-code").hidden = true;
   setReordering(false);
@@ -160,9 +177,13 @@ function clearSession() {
   document.querySelector("#search-form").reset();
   syncIdentityFilter();
   [page, search, district, identityFilter, importStatus] = [0, "", "", [], ""];
+  count = 0;
+  document.querySelector("#registration-count").textContent = "";
+  document.querySelector("#page-number").textContent = "";
+  setRegistrationLoading(false);
   document.querySelector("#clear-search").disabled = true;
   for (const selector of ["#registration-rows", "#staff-rows", "#stats-rows", "#district-stats-rows", "#district-activity-cards",
-    "#hosting-status-stats-rows", "#hosting-capacity-stats-rows"]) {
+    "#hosting-status-stats-rows", "#hosting-capacity-stats-rows", "#hosting-pickup-stats-rows"]) {
     document.querySelector(selector).replaceChildren();
   }
   document.querySelector("#stats-summary").textContent = "";
@@ -172,13 +193,23 @@ function clearSession() {
   visibleRegistrations = [];
 }
 
+// A logout or another login meanwhile makes an answer, or its network failure, belong to no one.
+const staleError = () => Object.assign(new Error("登入狀態已變更"), { stale: true });
+
 async function authRequest(path, body) {
-  const response = await fetch(`${config.supabaseUrl}/auth/v1/${path}`, {
-    method: "POST",
-    headers: { apikey: config.publishableKey, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const generation = loginGeneration;
+  let response;
+  try {
+    response = await fetch(`${config.supabaseUrl}/auth/v1/${path}`, {
+      method: "POST",
+      headers: { apikey: config.publishableKey, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (error) {
+    throw generation === loginGeneration ? error : staleError();
+  }
   const result = await response.json().catch(() => ({}));
+  if (generation !== loginGeneration) throw staleError();
   if (!response.ok) {
     const error = new Error(response.status < 500 ? "登入失敗，請確認帳號與密碼" : "登入服務暫時無法使用，請稍後再試");
     error.status = response.status;
@@ -188,34 +219,76 @@ async function authRequest(path, body) {
   sessionStorage.setItem(sessionKey, JSON.stringify(session));
 }
 
+async function refreshSession() {
+  try {
+    await authRequest("token?grant_type=refresh_token", { refresh_token: session.refresh_token });
+  } catch (error) {
+    if (error.stale) throw error;
+    // Only a rejected refresh token ends the login; a network error or Auth 5xx keeps it for a retry.
+    if (![400, 401, 403].includes(error.status)) throw new Error("暫時無法連線，請稍後再試");
+    clearSession();
+    const expired = new Error("登入已過期，請重新登入");
+    expired.sessionExpired = true;
+    throw expired;
+  }
+}
+
 async function accessToken() {
-  if (!session) throw new Error("請先登入");
+  // Without a session the request outlived its login; there is no one on screen to tell.
+  if (!session) throw staleError();
   if (Date.now() >= session.expires_at - 60_000) {
-    try {
-      await authRequest("token?grant_type=refresh_token", { refresh_token: session.refresh_token });
-    } catch (error) {
-      // Only a rejected refresh token ends the login; a network error or Auth 5xx keeps it for a retry.
-      if (![400, 401, 403].includes(error.status)) throw new Error("暫時無法連線，請稍後再試");
-      clearSession();
-      throw new Error("登入已過期，請重新登入");
+    // Requests share one refresh: a second would send the refresh token the first may already have rotated.
+    if (!refreshing) {
+      const current = refreshSession();
+      refreshing = current;
+      current.finally(() => { if (refreshing === current) refreshing = null; }).catch(() => {});
     }
+    await refreshing;
   }
   return session.access_token;
 }
 
-async function api(action, values = {}) {
-  if (!config?.supabaseUrl || !config?.publishableKey) throw new Error("網站尚未設定 Supabase 公開連線資訊");
-  const response = await fetch(`${config.supabaseUrl}/functions/v1/staff`, {
-    method: "POST",
-    headers: { apikey: config.publishableKey, Authorization: `Bearer ${await accessToken()}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ action, ...values }),
+// A failure answered after a logout or another login belongs to no one on screen.
+function showError(error, prefix = "") {
+  if (!error.stale) showMessage(prefix + error.message, true);
+}
+
+// The caller may give up on a slow token refresh, but never cancels it: the server may already have
+// rotated the refresh token. An expiry found after giving up still needs its message.
+function untilAborted(promise, signal) {
+  if (!signal) return promise;
+  promise.catch((error) => { if (signal.aborted && error.sessionExpired) showError(error); });
+  return new Promise((resolve, reject) => {
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    promise.then(resolve, reject);
   });
+}
+
+async function api(action, values = {}, signal) {
+  if (!config?.supabaseUrl || !config?.publishableKey) throw new Error("網站尚未設定 Supabase 公開連線資訊");
+  signal?.throwIfAborted();
+  const token = await untilAborted(accessToken(), signal);
+  const generation = loginGeneration;
+  let response;
+  try {
+    response = await fetch(`${config.supabaseUrl}/functions/v1/staff`, {
+      method: "POST",
+      headers: { apikey: config.publishableKey, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, ...values }),
+      signal,
+    });
+  } catch (error) {
+    throw generation === loginGeneration ? error : staleError();
+  }
   const result = await response.json().catch(() => ({}));
-  if (response.status === 401) clearSession();
+  // Any answer, a success included, that arrives after a logout or another login belongs to no one on screen.
+  if (generation !== loginGeneration) throw staleError();
   if (!response.ok) {
     const error = new Error(result.error || "後台暫時無法使用");
     error.status = response.status;
     error.code = result.code;
+    error.sessionExpired = response.status === 401;
+    if (error.sessionExpired) clearSession();
     throw error;
   }
   return result;
@@ -378,7 +451,7 @@ function fillForm(form, values, scroll = true) {
     if (field.type === "checkbox") field.checked = Boolean(value);
     else field.value = value ?? "";
   }
-  if (scroll) form.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (scroll) form.scrollIntoView({ behavior: Ui.scrollBehavior(), block: "center" });
 }
 
 // The edited row's id lives only here, so abandoning an edit (取消編輯) can never update that row.
@@ -545,11 +618,11 @@ async function saveReference(event, kind) {
     return showMessage("請先完成或取消活動排序，再儲存活動。", true);
   }
   if (kind === "settings" && data.is_registration_open && !reference.settings.is_registration_open
-    && !confirm("確定開放登記？請先完成正式環境驗收與核准。")) return;
+    && !await Ui.confirm("確定開放登記？請先完成正式環境驗收與核准。", "開放登記")) return;
   if (kind === "hosting" && data.is_hosting_open && !reference.settings.is_hosting_open
-    && !confirm("確定開放開家接待調查？公開登記頁與查詢頁將顯示接待區塊。")) return;
+    && !await Ui.confirm("確定開放開家接待調查？公開登記頁與查詢頁將顯示接待區塊。", "開放調查")) return;
   if (kind === "hosting" && data.is_pickup_open && !reference.settings.is_pickup_open
-    && !confirm("確定開放接機接待調查？公開登記頁與查詢頁將顯示接機問題。")) return;
+    && !await Ui.confirm("確定開放接機接待調查？公開登記頁與查詢頁將顯示接機問題。", "開放調查")) return;
   const edited = kind === "activity" && reference.activities.find((item) => String(item.id) === form.dataset.editingId);
   if (edited && data.audience !== "all" && data.audience !== edited.audience) {
     // People who signed up before the restriction keep their answer until their next save.
@@ -559,8 +632,8 @@ async function saveReference(event, kind) {
         && !Meals.eligible(data, { skipsHosting: !Meals.answersHosting(registration.meal_identity ?? "general"), skipsPickup: !Meals.answersHosting(registration.meal_identity ?? "general", "pickup"), hostingStatus: hostingOf(registration)?.status,
           pickupStatus: pickupOf(registration)?.status, choices: registration.registration_choices,
           activities: reference.activities })).length;
-    } catch (error) { return showMessage(error.message, true); }
-    if (outside && !confirm(`目前有 ${outside} 位不符對象的人已報名此活動，他們的報名會保留。確定改為限定對象？`)) return;
+    } catch (error) { return showError(error); }
+    if (outside && !await Ui.confirm(`目前有 ${outside} 位不符對象的人已報名此活動，他們的報名會保留。確定改為限定對象？`, "改為限定對象")) return;
   }
   try {
     await api("save_reference", { kind, data });
@@ -569,42 +642,124 @@ async function saveReference(event, kind) {
     renderReference();
     if (!["settings", "hosting"].includes(kind)) form.reset();
     showMessage("設定已儲存。");
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
 }
 
-async function loadRegistrations(recount = true) {
-  const result = await api("list_registrations", { page, search, summary: true, ...(!recount && { skip_count: true }), ...(district && { district_id: Number(district) }),
-    ...(identityFilter.length && { meal_identities: identityFilter.map((code) => code || null) }), ...(importStatus && { import_status: importStatus }) });
-  count = result.count ?? count;
-  document.querySelector("#registration-count").textContent = `共 ${count} 筆`;
-  document.querySelector("#page-number").textContent = `第 ${page + 1} 頁`;
-  document.querySelector("#previous-page").disabled = page === 0;
-  document.querySelector("#next-page").disabled = (page + 1) * REGISTRATIONS_PER_PAGE >= count;
-  const rows = document.querySelector("#registration-rows");
-  rows.replaceChildren();
-  visibleRegistrations = result.registrations;
-  const districtNames = new Map(reference.districts.map((district) => [district.id, district.name]));
-  for (const registration of result.registrations) {
-    const row = document.createElement("tr");
-    cell(row, registration.serial_no);
-    const nameCell = cell(row, registration.full_name);
-    appendIdentityBadge(nameCell, registration);
-    cell(row, districtNames.get(registration.district_id));
-    statusCell(row, "record", registration.record_status);
-    statusCell(row, "import", registration.import_status);
-    cell(row, shortTime(registration.updated_at));
-    // Same-district active family matches are named directly in the list.
-    const family = cell(row, registration.is_child ? `家長：${registration.parent_name}` : "");
-    if (registration.children?.length) {
-      family.textContent = `兒童：${registration.children.map((child) => child.full_name).join("、")}`;
+function setRegistrationLoading(loading) {
+  registrationLoading = loading;
+  document.querySelector("#registration-table").setAttribute("aria-busy", String(loading));
+  document.querySelector("#registration-loading").hidden = !loading;
+  for (const selector of ['#search-form button[type="submit"]', "#previous-page", "#next-page"]) {
+    const button = document.querySelector(selector);
+    if (loading) button.setAttribute("aria-disabled", "true");
+    else button.removeAttribute("aria-disabled");
+  }
+  const previous = document.querySelector("#previous-page");
+  const next = document.querySelector("#next-page");
+  const focused = document.activeElement;
+  previous.disabled = page === 0;
+  next.disabled = (page + 1) * REGISTRATIONS_PER_PAGE >= count;
+  // A pager button disabled under the keyboard would drop focus to the page; the other one, or the search field, takes it.
+  if (focused?.disabled && (focused === previous || focused === next)) {
+    const other = focused === previous ? next : previous;
+    (other.disabled ? searchForm.elements.search : other).focus();
+  }
+  updateClearSearch();
+}
+
+async function loadRegistrations(recount = true, conditions = null, request = {}) {
+  const pending = registrationLoading ? registrationRequest : null;
+  conditions ??= pending?.conditions ?? [page, search, district, identityFilter, importStatus];
+  request.conditions = conditions;
+  // A refresh during a search must inherit both its conditions and its count request.
+  request.recount = recount || Boolean(pending?.recount);
+  let complete;
+  request.done = new Promise((resolve) => { complete = resolve; });
+  let succeeded = false;
+  registrationRequest = request;
+  let [nextPage, nextSearch, nextDistrict, nextIdentityFilter, nextImportStatus] = conditions;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  setRegistrationLoading(true);
+  try {
+    let result;
+    while (true) {
+      result = await api("list_registrations", { page: nextPage, search: nextSearch, summary: true, ...(!request.recount && { skip_count: true }), ...(nextDistrict && { district_id: Number(nextDistrict) }),
+        ...(nextIdentityFilter.length && { meal_identities: nextIdentityFilter.map((code) => code || null) }), ...(nextImportStatus && { import_status: nextImportStatus }) }, controller.signal);
+      if (request !== registrationRequest) {
+        return succeeded = registrationRequest?.conditions === conditions ? await registrationRequest.done : false;
+      }
+      if (result.registrations.length) break;
+      // An empty page is recounted first, so a cached count never decides which page to show.
+      if (result.count == null) {
+        if (request.recount) break;
+        request.recount = true;
+        continue;
+      }
+      if (nextPage === 0) break;
+      nextPage = Math.min(nextPage - 1, Math.max(0, Math.ceil(result.count / REGISTRATIONS_PER_PAGE) - 1));
+      conditions[0] = nextPage;
     }
-    const actions = cell(row, "");
-    const edit = document.createElement("button");
-    edit.type = "button";
-    edit.textContent = "查看／處理";
-    edit.addEventListener("click", () => loadRegistrationDetail(registration).catch((error) => showMessage(error.message, true)));
-    actions.append(edit);
-    rows.append(row);
+    [page, search, district, identityFilter, importStatus] = conditions;
+    const first = page * REGISTRATIONS_PER_PAGE + 1;
+    const last = first + result.registrations.length - 1;
+    // A count skipped after a save is the old one; rows added meanwhile must not show past it.
+    count = result.count ?? Math.max(count, last);
+    document.querySelector("#registration-count").textContent = `共 ${count} 筆`
+      + (result.registrations.length ? (first === last ? `，目前第 ${first} 筆` : `，目前第 ${first} 至 ${last} 筆`) : "");
+    document.querySelector("#page-number").textContent = `第 ${page + 1} 頁`;
+    const rows = document.querySelector("#registration-rows");
+    rows.replaceChildren();
+    visibleRegistrations = result.registrations;
+    const districtNames = new Map(reference.districts.map((district) => [district.id, district.name]));
+    for (const registration of result.registrations) {
+      const row = document.createElement("tr");
+      cell(row, registration.serial_no);
+      const nameCell = cell(row, registration.full_name);
+      appendIdentityBadge(nameCell, registration);
+      cell(row, districtNames.get(registration.district_id));
+      statusCell(row, "record", registration.record_status);
+      statusCell(row, "import", registration.import_status);
+      cell(row, shortTime(registration.updated_at));
+      // Same-district active family matches are named directly in the list.
+      const family = cell(row, registration.is_child ? `家長：${registration.parent_name}` : "");
+      if (registration.children?.length) {
+        family.textContent = `兒童：${registration.children.map((child) => child.full_name).join("、")}`;
+      }
+      const actions = cell(row, "");
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.textContent = "查看／處理";
+      edit.addEventListener("click", async () => {
+        if (edit.getAttribute("aria-disabled") === "true") return;
+        const text = edit.textContent;
+        edit.setAttribute("aria-disabled", "true");
+        edit.setAttribute("aria-busy", "true");
+        edit.textContent = text + "（載入中）";
+        try { await loadRegistrationDetail(registration); }
+        catch (error) { showError(error); }
+        finally {
+          edit.removeAttribute("aria-disabled");
+          edit.removeAttribute("aria-busy");
+          edit.textContent = text;
+        }
+      });
+      actions.append(edit);
+      rows.append(row);
+    }
+    return succeeded = true;
+  } catch (error) {
+    // A current 401 clears the session and invalidates the request, but still needs its expiry message.
+    if (request !== registrationRequest && !error.sessionExpired) {
+      return succeeded = registrationRequest?.conditions === conditions ? await registrationRequest.done : false;
+    }
+    // Worded so that, after a successful write, it does not read as a request to send the write again.
+    if (controller.signal.aborted && !error.sessionExpired) throw new Error("名單載入逾時，請稍後重新查詢名單", { cause: error });
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    complete(succeeded);
+    if (request === registrationRequest) setRegistrationLoading(false);
   }
 }
 
@@ -1082,7 +1237,7 @@ function openRegistration(registration, editing = false) {
   const voidForm = document.querySelector("#void-form");
   voidForm.reset();
   voidForm.querySelectorAll("input, button").forEach((control) => control.disabled = registration.record_status === "void");
-  if (switching) detail.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (switching) detail.scrollIntoView({ behavior: Ui.scrollBehavior(), block: "start" });
 }
 
 // A parent's record lists the children naming them. While viewing, a name opens that child's record;
@@ -1132,8 +1287,19 @@ async function loadRegistrationDetail(registration) {
 
 // After a save the caller already shows the saved record, and only a filter can change the count.
 async function refreshRegistration(saved) {
-  await loadRegistrations(!saved || Boolean(search || district || identityFilter.length || importStatus));
-  const updated = visibleRegistrations.find((item) => item.id === selectedRegistration?.id);
+  const id = selectedRegistration?.id;
+  const opened = detailRequest;
+  const editing = editingRegistration;
+  const listed = await loadRegistrations(!saved || Boolean(search || district || identityFilter.length || importStatus));
+  // Another record opened, or an edit begun, while the list loaded is the person's newer choice; leave it.
+  // An edit already open is the one just saved, which the reload closes.
+  if (!id || selectedRegistration?.id !== id || detailRequest !== opened || (editingRegistration && !editing)) return;
+  if (!listed) {
+    // A newer list took over; the record itself still needs its new status, wherever the list now is.
+    if (!saved) await loadRegistrationDetail(selectedRegistration);
+    return;
+  }
+  const updated = visibleRegistrations.find((item) => item.id === id);
   if (!updated) document.querySelector("#registration-detail").hidden = true;
   else if (!saved) await loadRegistrationDetail(updated);
 }
@@ -1175,21 +1341,23 @@ function openStaffEditor(person) {
   const self = person.auth_user_id === profile.auth_user_id;
   passwordForm.hidden = self;
   document.querySelector("#staff-password-self").hidden = !self;
-  editor.scrollIntoView({ behavior: "smooth", block: "center" });
+  editor.scrollIntoView({ behavior: Ui.scrollBehavior(), block: "center" });
 }
 
 async function toggleStaff(person) {
-  if (!confirm(`確定要${person.is_active ? "停用" : "啟用"} ${person.username}？`)) return;
+  const verb = person.is_active ? "停用" : "啟用";
+  if (!await Ui.confirm(`確定要${verb} ${person.username}？`, verb)) return;
   try {
     await api("set_staff_active", { user_id: person.auth_user_id, is_active: !person.is_active });
     await loadStaff();
     showMessage("帳號已更新。");
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
 }
 
 async function openStaff() {
   const result = await api("me", { include_reference: true });
   profile = result.profile;
+  const openingProfile = profile;
   loginPanel.hidden = true;
   showChangePassword(profile.must_change_password);
   staffPanel.hidden = profile.must_change_password;
@@ -1206,7 +1374,9 @@ async function openStaff() {
     if (isAdmin) renderReference();
     else renderNewRegistrationForm();
     await Promise.all([loadRegistrations(), ...(isAdmin ? [loadStaff()] : [])]);
+    if (profile !== openingProfile) return;
   } catch (error) {
+    if (profile !== openingProfile && !error.sessionExpired) return;
     // Admin views stay hidden when loading fails; a kept admin view would leave the page blank.
     showView("section-registrations");
     throw error;
@@ -1271,7 +1441,7 @@ document.querySelector("#student-statistics-identity-form").addEventListener("su
     redrawIdentities();
     if (document.querySelector("#district-stats-rows").children.length) await showStatistics();
     showMessage("學生統計身分已儲存。");
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
   finally { button.disabled = false; }
 });
 
@@ -1301,8 +1471,8 @@ function renderIdentities() {
       remove.type = "button";
       remove.className = "secondary";
       remove.textContent = "刪除";
-      remove.addEventListener("click", () => {
-        if (confirm(`刪除身分「${identity.name}」？已使用的身分無法刪除。`)) saveIdentity("delete_identity", { code: identity.code });
+      remove.addEventListener("click", async () => {
+        if (await Ui.confirm(`刪除身分「${identity.name}」？已使用的身分無法刪除。`, "刪除")) saveIdentity("delete_identity", { code: identity.code });
       });
       row.lastElementChild.append(remove);
     }
@@ -1337,14 +1507,14 @@ async function persistIdentity(kind, data) {
     redrawIdentities();
     document.querySelector("#identity-form").reset();
     showMessage("身分已更新。");
-  } catch (error) { showMessage(error.message, true); return; }
+  } catch (error) { showError(error); return; }
   // The identity is already saved, so a failed redraw must not read as a failed save.
   try {
     await loadRegistrations();
     if (selectedRegistration) renderDetailTitle(selectedRegistration);
     // 各區 always has its 合計 row once statistics were shown, even with no published activity.
     if (document.querySelector("#district-stats-rows").children.length) await showStatistics();
-  } catch (error) { showMessage(`身分已更新，但畫面未能重新整理：${error.message}`, true); }
+  } catch (error) { showError(error, "身分已更新，但畫面未能重新整理："); }
 }
 
 document.querySelector("#identity-form").addEventListener("submit", (event) => {
@@ -1448,9 +1618,12 @@ identityReorderButton.addEventListener("click", async () => {
     const byCode = new Map(reference.identities.map((item) => [item.code, item]));
     reference.identities = order.map((code, index) => ({ ...byCode.get(code), sort_order: index + 1 }));
   } catch (error) {
-    if (error.status !== 409) return showMessage(error.message, true);
+    if (error.status !== 409) return showError(error);
     try { reference.identities = (await api("list_reference")).identities; }
-    catch (reloadError) { return showMessage(`${error.message}（重新載入失敗：${reloadError.message}）`, true); }
+    catch (reloadError) {
+      if (!reloadError.stale) showMessage(`${error.message}（重新載入失敗：${reloadError.message}）`, true);
+      return;
+    }
     setIdentityReordering(false);
     redrawIdentities();
     return showMessage("身分清單已有變動，已重新載入，請再調整一次排序。", true);
@@ -1494,23 +1667,25 @@ reorderButton.addEventListener("click", async () => {
   }
   const order = activityOrder();
   if (JSON.stringify(order) === activityOrderBefore) return setReordering(false);
-  // 取消 also waits, so it cannot put back the old order on screen while the new one is being saved.
-  reorderButton.disabled = cancelReorderButton.disabled = true;
+  // 取消 also waits, so it cannot put back the old order on screen while the new one is being saved;
+  // the rows stay still too, as with 身分別, since a move now would never be sent.
+  reorderButton.disabled = cancelReorderButton.disabled = activityRows.inert = true;
   try {
     await api("reorder_activities", { activity_ids: order });
   } catch (error) {
-    if (error.status !== 409) return showMessage(error.message, true);
+    if (error.status !== 409) return showError(error);
     // The list changed elsewhere; retrying or 取消 would keep using the stale list, so reload it.
     try {
       reference.activities = (await api("list_reference")).activities;
     } catch (reloadError) {
-      return showMessage(`${error.message}（重新載入失敗：${reloadError.message}）`, true);
+      if (!reloadError.stale) showMessage(`${error.message}（重新載入失敗：${reloadError.message}）`, true);
+      return;
     }
     setReordering(false);
     renderNewRegistrationForm();
     return showMessage("活動清單已有變動，已重新載入，請再調整一次排序。", true);
   } finally {
-    reorderButton.disabled = cancelReorderButton.disabled = false;
+    reorderButton.disabled = cancelReorderButton.disabled = activityRows.inert = false;
   }
   // The server numbers activities 1, 2, 3... in the order sent, so update the local copy
   // instead of reloading everything.
@@ -1527,7 +1702,19 @@ reorderButton.addEventListener("click", async () => {
 
 cancelReorderButton.addEventListener("click", () => setReordering(false));
 
-for (const [sortRows, sortSection] of [[activityRows, activitySection], [identityRows, identitySection]]) {
+for (const [sortRows, sortSection, statusId, endButtons] of [
+  [activityRows, activitySection, "#activity-reorder-status", [reorderButton, cancelReorderButton]],
+  [identityRows, identitySection, "#identity-reorder-status", [identityReorderButton, identityCancelButton]],
+]) {
+  const status = document.querySelector(statusId);
+  let reorderAnnouncement;
+  // 完成排序 and 取消 end the moves; a position still waiting to be announced, even during a slow save, is stale.
+  for (const button of endButtons) {
+    button.addEventListener("click", () => {
+      clearTimeout(reorderAnnouncement);
+      status.textContent = "";
+    });
+  }
   sortRows.addEventListener("pointerdown", (event) => {
     const handle = event.target.closest(".drag-handle");
     // Only the first finger or the main mouse button drags; a second finger or a right-click does not.
@@ -1600,9 +1787,13 @@ for (const [sortRows, sortSection] of [[activityRows, activitySection], [identit
     else sortRows.insertBefore(row, before);
     row.scrollIntoView({ block: "nearest", inline: "nearest" });
     handle.focus({ preventScroll: true });
-    if (sortRows === identityRows) {
-      document.querySelector("#identity-reorder-status").textContent = `${row.cells[0].textContent}，第 ${[...sortRows.rows].indexOf(row) + 1} 位`;
-    }
+    clearTimeout(reorderAnnouncement);
+    status.textContent = "";
+    // Safari refocuses the reinserted handle; let that announcement finish first.
+    reorderAnnouncement = setTimeout(() => {
+      if (!sortRows.contains(row) || !sortSection.classList.contains("reordering")) return;
+      status.textContent = `${(row.cells[0].querySelector("summary") ?? row.cells[0]).textContent}，第 ${[...sortRows.rows].indexOf(row) + 1} 位`;
+    }, 500);
   });
 }
 
@@ -1611,13 +1802,14 @@ document.querySelector("#login-form").addEventListener("submit", async (event) =
   const form = event.currentTarget;
   const username = String(new FormData(form).get("username")).trim().toLowerCase();
   if (!/^[a-z][a-z0-9_-]{2,30}$/.test(username)) return showMessage("請檢查帳號格式", true);
+  clearSession();
   try {
     await authRequest("token?grant_type=password", { email: `${username}@accounts.invalid`, password: form.elements.password.value });
     form.elements.password.value = "";
     // A message left from before login (for example "請使用新密碼重新登入") no longer applies.
     hideMessage();
     await openStaff();
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
 });
 
 // The same form serves a required change (first login or a reset) and a change by choice.
@@ -1633,7 +1825,7 @@ function showChangePassword(visible, byChoice = false) {
 
 document.querySelector("#change-password-button").addEventListener("click", () => {
   showChangePassword(true, true);
-  changePasswordPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+  changePasswordPanel.scrollIntoView({ behavior: Ui.scrollBehavior(), block: "start" });
   document.querySelector('#change-password-form input[name="current_password"]').focus();
 });
 document.querySelector("#cancel-change-password").addEventListener("click", () => showChangePassword(false));
@@ -1648,7 +1840,7 @@ document.querySelector("#change-password-form").addEventListener("submit", async
     form.reset();
     clearSession();
     showMessage("密碼已更改，請使用新密碼重新登入。", false, true);
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
 });
 
 document.querySelector("#create-staff-form").addEventListener("submit", async (event) => {
@@ -1659,38 +1851,47 @@ document.querySelector("#create-staff-form").addEventListener("submit", async (e
     form.reset();
     await loadStaff();
     showMessage("帳號已建立。請以安全方式私下交付密碼。");
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
 });
 
 document.querySelector("#edit-staff-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!editingStaff) return;
-  const values = Object.fromEntries(new FormData(event.currentTarget));
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
+  const person = editingStaff;
   try {
-    await api("update_staff", { user_id: editingStaff.auth_user_id, ...values });
-    if (editingStaff.auth_user_id === profile.auth_user_id) {
+    await api("update_staff", { user_id: person.auth_user_id, ...values });
+    if (person.auth_user_id === profile.auth_user_id) {
       profile.display_name = values.display_name.trim();
       document.querySelector("#identity").textContent = `${profile.display_name}｜${label("role", profile.role)}`;
     }
-    const renamed = values.username.trim().toLowerCase() !== editingStaff.username;
-    editingStaff = { ...editingStaff, username: values.username.trim().toLowerCase(), display_name: values.display_name.trim() };
-    document.querySelector("#staff-editor-title").textContent = `修改帳號：${editingStaff.username}`;
+    const username = values.username.trim().toLowerCase();
+    const renamed = username !== person.username;
+    // The editor may have closed or moved to another account while this saved.
+    if (editingStaff?.auth_user_id === person.auth_user_id) {
+      editingStaff = { ...person, username, display_name: values.display_name.trim() };
+      document.querySelector("#staff-editor-title").textContent = `修改帳號：${username}`;
+      // The server saved it lowercased; the field shows that, not the capitals a phone keyboard added,
+      // unless the name was edited again while this saved.
+      if (form.elements.username.value === values.username) form.elements.username.value = username;
+    }
     showMessage(renamed ? "帳號已更新，之後請用新帳號名稱登入。" : "帳號已更新。");
     await loadStaff();
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
 });
 
 document.querySelector("#staff-password-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
-  if (!editingStaff || !confirm(`確定設定 ${editingStaff.username} 的密碼？對方所有已登入的裝置都會登出。`)) return;
+  if (!editingStaff || !await Ui.confirm(`確定設定 ${editingStaff.username} 的密碼？對方所有已登入的裝置都會登出。`, "設定密碼")) return;
   try {
     const result = await api("set_staff_password", { user_id: editingStaff.auth_user_id, password: form.elements.password.value });
     form.reset();
     showMessage(result.must_change_password
       ? "密碼已設定。對方是管理員，下次登入時須改成自己的密碼；請以安全方式私下交付。"
       : "密碼已設定。請以安全方式私下交付。");
-  } catch (error) { showMessage(error.message, true); }
+  } catch (error) { showError(error); }
 });
 
 document.querySelector("#close-staff-editor").addEventListener("click", () => {
@@ -1698,20 +1899,13 @@ document.querySelector("#close-staff-editor").addEventListener("click", () => {
   editingStaff = null;
 });
 
-// A failed load keeps the previous page and conditions, so the controls match the rows on screen.
-async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district, nextIdentityFilter = identityFilter, nextImportStatus = importStatus) {
-  const previous = [page, search, district, identityFilter, importStatus];
-  [page, search, district, identityFilter, importStatus] = [nextPage, nextSearch, nextDistrict, nextIdentityFilter, nextImportStatus];
+// Conditions change only with the latest successful response, so a failure keeps the displayed list coherent.
+async function showRegistrations(nextPage, nextSearch = search, nextDistrict = district, nextIdentityFilter = identityFilter, nextImportStatus = importStatus, request = {}) {
   try {
-    await loadRegistrations();
-    return true;
+    return await loadRegistrations(true, [nextPage, nextSearch, nextDistrict, nextIdentityFilter, nextImportStatus], request);
   } catch (error) {
-    // A 401 has already logged out and cleared the conditions; restoring them would hand them to the next login.
-    if (session) [page, search, district, identityFilter, importStatus] = previous;
-    showMessage(error.message, true);
+    if (request === registrationRequest || error.sessionExpired) showError(error);
     return false;
-  } finally {
-    updateClearSearch();
   }
 }
 const searchForm = document.querySelector("#search-form");
@@ -1744,7 +1938,12 @@ function syncIdentityFilter() {
 }
 // Enabled while either the typed or the applied conditions are set, so a filter typed away but still on the list can be cleared.
 function updateClearSearch() {
-  document.querySelector("#clear-search").disabled = !search && !district && !identityFilter.length && !importStatus
+  const button = document.querySelector("#clear-search");
+  // While loading it is only aria-disabled and keeps its state, so a keyboard press keeps focus there in case
+  // the load fails and the conditions come back.
+  if (registrationLoading) return button.setAttribute("aria-disabled", "true");
+  button.removeAttribute("aria-disabled");
+  button.disabled = !search && !district && !identityFilter.length && !importStatus
     && !searchForm.elements.search.value.trim() && !searchForm.elements.district_id.value
     && !enteredIdentityFilter().length && !searchForm.elements.import_status.value;
 }
@@ -1765,43 +1964,54 @@ document.addEventListener("keydown", (event) => {
 });
 searchForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  // Enter in a field submits too, where the button's aria-disabled is not announced.
+  if (registrationLoading) return showMessage("名單載入中，請等載入完成後再查詢。");
   identityFilterBox.open = false;
   // Nothing ticked searches 全部身分, and the boxes say so.
   const identities = enteredIdentityFilter();
   setIdentityFilter(identities);
   showRegistrations(0, searchForm.elements.search.value.trim(), searchForm.elements.district_id.value, identities, searchForm.elements.import_status.value);
 });
-document.querySelector("#clear-search").addEventListener("click", async () => {
+document.querySelector("#clear-search").addEventListener("click", async (event) => {
+  if (registrationLoading) return;
+  const button = event.currentTarget;
+  const hadFocus = document.activeElement === button;
   const entered = [searchForm.elements.search.value, searchForm.elements.district_id.value, enteredIdentityFilter(), searchForm.elements.import_status.value];
   searchForm.reset();
   syncIdentityFilter();
   // A failed load keeps the conditions from before the click, in the fields as well as on the list.
-  if (!await showRegistrations(0, "", "", [], "") && session) {
+  const request = {};
+  if (!await showRegistrations(0, "", "", [], "", request) && session && registrationRequest?.conditions === request.conditions) {
     [searchForm.elements.search.value, searchForm.elements.district_id.value] = entered;
     setIdentityFilter(entered[2]);
     searchForm.elements.import_status.value = entered[3];
     updateClearSearch();
+  } else if (hadFocus && button.disabled && [button, document.body].includes(document.activeElement)) {
+    // Nothing is left to clear, so focus moves on to the search field instead of dropping to the page.
+    searchForm.elements.search.focus();
   }
 });
 document.querySelector("#refresh-stats").addEventListener("click", () =>
-  showStatistics().catch((error) => showMessage(error.message, true)));
+  showStatistics().catch((error) => showError(error)));
 document.querySelector("#download-csv").addEventListener("click", () =>
-  downloadCsv().catch((error) => showMessage(error.message, true)));
+  downloadCsv().catch((error) => showError(error)));
 document.querySelector("#download-stats-csv").addEventListener("click", () =>
-  downloadStatisticsCsv().catch((error) => showMessage(error.message, true)));
+  downloadStatisticsCsv().catch((error) => showError(error)));
 let savingRegistration = false;
 document.querySelector("#edit-registration-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   if (savingRegistration) return;
   const form = event.currentTarget;
   let fields;
-  try { fields = registrationFields(registrationParts.detail); } catch (error) { return showMessage(error.message, true); }
+  try { fields = registrationFields(registrationParts.detail); } catch (error) { return showError(error); }
   // Saving applies the audience rule to sign-ups from before an activity was restricted.
   const reverted = Meals.revertedCount(document.querySelector("#detail-choices"));
-  if (reverted && !confirm(`這筆登記有 ${reverted} 項限定活動不符報名對象，儲存後會改為不參加。確定儲存？`)) return;
+  const registrationId = selectedRegistration.id;
+  if (reverted && !await Ui.confirm(`這筆登記有 ${reverted} 項限定活動不符報名對象，儲存後會改為不參加。確定儲存？`, "儲存")) return;
+  // The dialog does not pause the page: a record that loaded meanwhile must not get this one's fields.
+  if (selectedRegistration?.id !== registrationId) return showMessage("開啟的登記已換成另一筆，未儲存。", true);
   savingRegistration = true;
   const controls = [...form.querySelectorAll("input, select, textarea, button")].map((control) => [control, control.disabled]);
-  const registrationId = selectedRegistration.id;
   const submit = form.querySelector('button[type="submit"]');
   controls.forEach(([control]) => control.disabled = true);
   submit.textContent = "儲存中…";
@@ -1815,10 +2025,10 @@ document.querySelector("#edit-registration-form").addEventListener("submit", asy
       await refreshRegistration(result.registration);
       document.querySelector("#start-registration-edit").focus();
     } catch (error) {
-      showMessage(`登記資料已儲存，但畫面未能重新整理：${error.message}`, true);
+      showError(error, "登記資料已儲存，但畫面未能重新整理：");
     }
   } catch (error) {
-    showMessage(error.message, true);
+    showError(error);
   } finally {
     savingRegistration = false;
     form.removeAttribute("aria-busy");
@@ -1862,14 +2072,15 @@ document.querySelector("#new-registration-form").addEventListener("submit", asyn
     notice.hidden = false;
     form.reset();
     renderNewRegistrationForm();
-    await loadRegistrations();
     showMessage("協助登記已建立。");
+    try { await loadRegistrations(); }
+    catch (error) { showError(error, "協助登記已建立，但畫面未能重新整理："); }
   } catch (error) {
     if (["HOSTING_REQUIRED", "PICKUP_REQUIRED"].includes(error.code)) {
       reference.settings[error.code === "HOSTING_REQUIRED" ? "is_hosting_open" : "is_pickup_open"] = true;
       renderNewRegistrationForm();
     }
-    showMessage(error.message, true);
+    showError(error);
   } finally {
     submit.disabled = false;
   }
@@ -1881,24 +2092,34 @@ document.querySelector("#import-form").addEventListener("submit", async (event) 
       registration_id: selectedRegistration.id,
       status: new FormData(event.currentTarget).get("status"),
     });
-    await refreshRegistration();
     showMessage("匯入狀態已更新。");
-  } catch (error) { showMessage(error.message, true); }
+    try { await refreshRegistration(); }
+    catch (error) { showError(error, "匯入狀態已更新，但畫面未能重新整理："); }
+  } catch (error) { showError(error); }
 });
 document.querySelector("#void-form").addEventListener("submit", async (event) => {
   event.preventDefault();
-  if (!confirm("確定作廢此登記？作廢後不計入統計與 CSV，且無法在頁面上恢復。")) return;
+  // Read before the dialog: currentTarget is null once the handler has awaited.
+  const reason = String(new FormData(event.currentTarget).get("reason")).trim();
+  const registrationId = selectedRegistration.id;
+  if (!await Ui.confirm("確定作廢此登記？作廢後不計入統計與 CSV，且無法在頁面上恢復。", "作廢")) return;
+  // The dialog does not pause the page: a record that loaded meanwhile is not the one confirmed.
+  if (selectedRegistration?.id !== registrationId) return showMessage("開啟的登記已換成另一筆，未作廢。", true);
   try {
-    await api("void_registration", {
-      registration_id: selectedRegistration.id,
-      reason: String(new FormData(event.currentTarget).get("reason")).trim(),
-    });
-    await refreshRegistration();
+    await api("void_registration", { registration_id: registrationId, reason });
     showMessage("登記已作廢。");
-  } catch (error) { showMessage(error.message, true); }
+    try { await refreshRegistration(); }
+    catch (error) { showError(error, "登記已作廢，但畫面未能重新整理："); }
+  } catch (error) { showError(error); }
 });
-document.querySelector("#previous-page").addEventListener("click", () => showRegistrations(page - 1));
-document.querySelector("#next-page").addEventListener("click", () => showRegistrations(page + 1));
+document.querySelector("#previous-page").addEventListener("click", () => {
+  if (registrationLoading) return;
+  showRegistrations(page - 1);
+});
+document.querySelector("#next-page").addEventListener("click", () => {
+  if (registrationLoading) return;
+  showRegistrations(page + 1);
+});
 document.querySelector("#logout-button").addEventListener("click", async () => {
   const token = session?.access_token;
   let remoteError = false;
@@ -1915,4 +2136,4 @@ document.querySelector("#logout-button").addEventListener("click", async () => {
 });
 
 // Auth failures already clear the session in api()/accessToken(); a brief outage should not log the user out.
-if (session) openStaff().catch((error) => showMessage(error.message, true));
+if (session) openStaff().catch((error) => showError(error));

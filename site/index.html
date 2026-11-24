@@ -15,6 +15,7 @@
     <script src="./hosting.js" defer></script>
     <script src="./pickup.js" defer></script>
     <script src="./meals.js" defer></script>
+    <script src="./ui.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -41,7 +42,8 @@
 
       <p id="page-message" class="message" role="status" hidden></p>
 
-      <section class="card" id="registration-service" aria-label="登記服務">
+      <!-- data-loading hides it until the page data arrives, so the schedule appears above it instead of pushing it off screen. -->
+      <section class="card" id="registration-service" aria-label="登記服務" data-loading>
         <div class="tabs" role="tablist" aria-label="登記服務">
           <button type="button" id="register-tab" role="tab" aria-controls="register-panel" aria-selected="true" tabindex="0">登記參加</button>
           <button type="button" id="query-tab" role="tab" aria-controls="query-panel" aria-selected="false" tabindex="-1">查詢或修改登記</button>

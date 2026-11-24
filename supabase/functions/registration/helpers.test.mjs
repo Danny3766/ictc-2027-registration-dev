@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readRequestJson, clientIp, isUuid, sourceKey, validChild, validMealIdentity, formErrorResponse } from "./index.ts";
+import { handler, readRequestJson, clientIp, isUuid, sourceKey, validChild, validMealIdentity, formErrorResponse } from "./index.ts";
 
 test("JSON bodies enforce the byte limit while reading", async () => {
   const payload = '"' + "a".repeat(63_998) + '"';
@@ -102,4 +102,19 @@ test("create and update map database errors alike; a survey that opened carries 
   assert.equal((await mapped("anything", undefined, "22023")).status, 400);
   assert.equal(await mapped("NAME_TAKEN"), null);
   assert.equal(await formErrorResponse(null, database(null)), null);
+});
+
+test("CORS preflight caches permissions for two hours without requiring authentication", async () => {
+  const reply = await handler(new Request("https://example.test", {
+    method: "OPTIONS",
+    headers: { Origin: "https://example.github.io", "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "apikey, content-type" },
+  }));
+  assert.equal(reply.status, 204);
+  assert.equal(reply.headers.get("Access-Control-Max-Age"), "7200");
+  assert.equal(reply.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.match(reply.headers.get("Access-Control-Allow-Methods"), /POST/);
+  assert.match(reply.headers.get("Access-Control-Allow-Headers"), /apikey/);
+  assert.match(reply.headers.get("Access-Control-Allow-Headers"), /content-type/);
+  assert.equal(await reply.text(), "");
 });

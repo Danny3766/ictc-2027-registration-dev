@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { answerConfirm, confirmDialog } from "./confirm-dialog.mjs";
 
 async function expectEqualIdentityColumns(fields) {
   // 身分別 wraps to its own row on phones, so only name and 區 are compared as the two equal columns.
@@ -47,6 +48,11 @@ test("missing fields are listed between the schedule and forms and clear as they
   await page.getByRole("button", { name: "送出登記" }).click();
   await expect(page.locator("#page-message")).toContainText("姓名、區、身分別、測試活動");
   await expect(page.locator("#page-message")).toBeVisible();
+  // Focus goes to the list's first link, which is on screen; the first missing field may not be.
+  await expect(page.locator("#page-message").getByRole("link", { name: "姓名" })).toBeFocused();
+  // Each name in the list jumps to its field, so keyboard users need not Tab through the form.
+  await page.locator("#page-message").getByRole("link", { name: "測試活動" }).click();
+  await expect(page.locator('#registration-form input[name="activity_1"]').first()).toBeFocused();
   expect(await page.locator("#page-message").evaluate((element) => [
     element.previousElementSibling.id, element.nextElementSibling.id,
   ])).toEqual(["program-section", "registration-service"]);
@@ -58,6 +64,7 @@ test("missing fields are listed between the schedule and forms and clear as they
   await expect(activity.locator("strong")).toHaveCSS("color", "rgb(36, 48, 43)");
   await activity.locator('input[value="false"]').check();
   await expect(activity).not.toHaveClass(/field-invalid/);
+  await expect(activity.locator('input[value="true"]')).toHaveAttribute("aria-invalid", "false");
   expect(requests).toHaveLength(0);
 
   await page.getByRole("tab", { name: "查詢或修改登記" }).click();
@@ -72,6 +79,27 @@ test("missing fields are listed between the schedule and forms and clear as they
   await page.getByRole("button", { name: "查詢", exact: true }).click();
   await expect(page.locator("#page-message")).toHaveText("查無登記資料，請確認姓名寫法與區和登記時相同");
   expect(requests).toHaveLength(1);
+});
+
+test("the forms wait for the page data, so a late schedule never pushes them off screen", async ({ page }) => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route("**/functions/v1/registration", async (route) => {
+    await held;
+    await route.fulfill({ json: { ...openPage(), program: [{ event_date: "2027-02-20", start_time: "12:30:00", title: "聚會" }] } });
+  });
+  await page.goto("/");
+  await expect(page.locator("#registration-service")).toBeHidden();
+  release();
+  await expect(page.locator("#program-section")).toBeVisible();
+  await expect(page.locator("#registration-service")).toBeVisible();
+
+  // Without the page data there is nothing to fill in, so the forms stay away and the notice explains.
+  await page.unroute("**/functions/v1/registration");
+  await page.route("**/functions/v1/registration", (route) => route.fulfill({ status: 503, json: { error: "無法載入登記資料" } }));
+  await page.reload();
+  await expect(page.locator("#page-notice")).toHaveText("無法載入登記資料");
+  await expect(page.locator("#registration-service")).toBeHidden();
 });
 
 test("announcements stay above the schedule while query and edit results appear above registration details", async ({ page }) => {
@@ -93,10 +121,10 @@ test("announcements stay above the schedule while query and edit results appear 
   await page.getByRole("button", { name: "儲存修改" }).click();
   await expect(page.locator("#page-message")).toHaveText("請補填以下欄位：身分別");
   await expect(page.locator('#edit-form select[name="meal_identity"]')).toHaveAttribute("aria-invalid", "true");
-  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "取消修改" }).click();
+  await answerConfirm(page);
   await expect(page.locator("#page-message")).toHaveText("以下為目前登記內容。");
-  await expect(page.locator("#edit-form .field-invalid, #edit-form [aria-invalid]")).toHaveCount(0);
+  await expect(page.locator('#edit-form .field-invalid, #edit-form [aria-invalid="true"]')).toHaveCount(0);
   await page.getByRole("button", { name: "修改登記內容" }).click();
   await page.locator('#edit-form select[name="meal_identity"]').selectOption("general");
   await page.locator('#edit-form input[name="activity_1"][value="false"]').check();
@@ -291,12 +319,12 @@ test("cancel and tab changes protect unsaved edits, then another query is availa
   await page.getByRole("button", { name: "修改登記內容" }).click();
   await page.locator('#edit-form input[name="activity_1"][value="false"]').check();
 
-  page.once("dialog", async (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "取消修改" }).click();
+  expect(await answerConfirm(page, false)).toBe("確定放棄尚未儲存的修改？");
   await expect(page.locator('#edit-form input[name="activity_1"][value="false"]')).toBeChecked();
 
-  page.once("dialog", async (dialog) => dialog.dismiss());
   await page.getByRole("tab", { name: "登記參加" }).click();
+  await answerConfirm(page, false);
   await expect(page.getByRole("tab", { name: "查詢或修改登記" })).toHaveAttribute("aria-selected", "true");
 
   await expect(page.getByRole("button", { name: "查詢" })).toBeDisabled();
@@ -304,16 +332,16 @@ test("cancel and tab changes protect unsaved edits, then another query is availa
   await expect(page.locator('#edit-form input[name="activity_1"][value="false"]')).toBeChecked();
   expect(await page.evaluate(() => window.dispatchEvent(new Event("beforeunload", { cancelable: true })))).toBe(false);
 
-  page.once("dialog", async (dialog) => dialog.accept());
   await page.getByRole("button", { name: "取消修改" }).click();
+  await answerConfirm(page);
   await expect(page.locator("#edit-form input[type=radio]")).toHaveCount(0);
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：參加");
   await expect(page.getByRole("button", { name: "查詢" })).toBeEnabled();
 
   await page.getByRole("button", { name: "修改登記內容" }).click();
   await page.locator('#edit-form input[name="activity_1"][value="false"]').check();
-  page.once("dialog", async (dialog) => dialog.accept());
   await page.getByRole("tab", { name: "登記參加" }).click();
+  await answerConfirm(page);
   await expect(page.getByRole("tab", { name: "登記參加" })).toHaveAttribute("aria-selected", "true");
   await page.getByRole("tab", { name: "查詢或修改登記" }).click();
   await expect(page.locator("#edit-activities")).toContainText("登記狀態：參加");
@@ -321,8 +349,8 @@ test("cancel and tab changes protect unsaved edits, then another query is availa
   await page.getByRole("button", { name: "修改登記內容" }).click();
   await page.locator('#edit-form input[name="activity_1"][value="false"]').check();
   await expect(page.getByRole("button", { name: "查詢" })).toBeDisabled();
-  page.once("dialog", async (dialog) => dialog.accept());
   await page.getByRole("button", { name: "取消修改" }).click();
+  await answerConfirm(page);
   await page.locator('#query-form input[name="full_name"]').fill("另一個人");
   await page.getByRole("button", { name: "查詢" }).click();
   await expect.poll(() => requests.length).toBe(2);
@@ -961,11 +989,9 @@ test("a description sent while editing shows in the edit view and the registrati
   await expect(page.locator('#edit-hosting-section input[name="hosting_status"]')).toHaveCount(3);
   await expect(page.locator("#edit-hosting-section")).toContainText("接待期間 2/19（五）～2/22（一）");
   await expect(notAttending).toBeChecked();
-  let asked = false;
-  page.once("dialog", (dialog) => { asked = true; return dialog.accept(); });
   await page.getByRole("tab", { name: "登記參加" }).click();
   // The kept activity edit is still unsaved, so leaving asks first.
-  expect(asked).toBe(true);
+  await answerConfirm(page);
   await page.locator('#registration-form [name="meal_identity"]').selectOption("general");
   await expect(page.locator("#hosting-section")).toContainText("接待期間 2/19（五）～2/22（一）");
 });
@@ -1049,10 +1075,8 @@ test("changing only pickup on an unanswered registration still asks before disca
   const pickup = page.locator("#edit-pickup");
   await pickup.locator('[name="pickup_status"][value="yes"]').check();
   await pickup.locator('[name="pickup_count"]').selectOption("2");
-  let asked = false;
-  page.once("dialog", (dialog) => { asked = true; return dialog.dismiss(); });
   await page.getByRole("button", { name: "取消修改" }).click();
-  expect(asked).toBe(true);
+  await answerConfirm(page, false);
   await expect(pickup.locator('[name="pickup_count"]')).toHaveValue("2");
 });
 
@@ -1219,10 +1243,8 @@ test("a sign-up from before a restriction is kept until the person saves another
   // Opening the form changed nothing the person did, so there is nothing to save or confirm.
   const save = page.getByRole("button", { name: "儲存修改" });
   await expect(save).toBeDisabled();
-  let asked = false;
-  page.once("dialog", (dialog) => { asked = true; return dialog.dismiss(); });
   await page.getByRole("button", { name: "取消修改" }).click();
-  expect(asked).toBe(false);
+  await expect(confirmDialog(page)).toHaveCount(0);
   await expect(page.locator("#edit-form input[type=radio]")).toHaveCount(0);
 
   await page.getByRole("button", { name: "修改登記內容" }).click();
@@ -1617,4 +1639,89 @@ test("reminders are blue blocks, and the lookup result is framed with a grey not
   await page.getByRole("button", { name: "取消修改" }).click();
   await expect(result.locator("fieldset p.reminder")).toBeHidden();
   await expect(note.locator(".edit-only")).toBeHidden();
+});
+
+for (const hostingOpen of [false, true]) {
+  for (const pickupOpen of [false, true]) {
+    test(`public fields start valid including edit surveys: hosting=${hostingOpen}, pickup=${pickupOpen}`, async ({ page }) => {
+      await page.route("**/functions/v1/registration", (route) => route.fulfill({
+        json: route.request().method() === "GET"
+          ? { ...openPage(), settings: { ...openPage().settings, is_hosting_open: hostingOpen, is_pickup_open: pickupOpen } }
+          : queried(true),
+      }));
+      await page.goto("/");
+      await expect(page.locator("#activities input")).toHaveCount(2);
+      await page.locator('#registration-form [name="meal_identity"]').selectOption("general");
+      for (const [selector, open] of [["#hosting-fields", hostingOpen], ["#pickup-fields", pickupOpen]]) {
+        if (open) await expect(page.locator(`${selector} input`).first()).toBeVisible();
+      }
+      for (const selector of ["#registration-form", "#query-form"]) {
+        await expect(page.locator(`${selector} :is(input, select, textarea):not([aria-invalid="false"])`)).toHaveCount(0);
+      }
+      await query(page);
+      await page.locator("#start-edit").click();
+      await expect(page.locator("#edit-activities input")).toHaveCount(2);
+      for (const [selector, open] of [["#edit-hosting", hostingOpen], ["#edit-pickup", pickupOpen]]) {
+        if (open) await expect(page.locator(`${selector} input`).first()).toBeVisible();
+      }
+      await expect(page.locator('#edit-form :is(input, select, textarea):not([aria-invalid="false"])')).toHaveCount(0);
+    });
+  }
+}
+
+test("public messages respect changes to reduced motion and HTML escaping protects quoted attributes", async ({ page }) => {
+  await page.route("**/functions/v1/registration", (route) => route.fulfill({ json: openPage() }));
+  await page.goto("/");
+  await expect(page.locator("#activities input")).toHaveCount(2);
+  for (const [reducedMotion, expected] of [["reduce", "auto"], ["no-preference", "smooth"]]) {
+    await page.emulateMedia({ reducedMotion });
+    const behavior = await page.evaluate(() => {
+      const target = document.querySelector("#page-message");
+      let behavior;
+      target.scrollIntoView = (options) => { behavior = options.behavior; };
+      showMessage("test");
+      return behavior;
+    });
+    expect(behavior).toBe(expected);
+  }
+  expect(await page.evaluate(() => escapeHtml('<>&"' + "'"))).toBe("&lt;&gt;&amp;&quot;&#39;");
+});
+
+test("selected tabs keep a shape indicator in forced colors", async ({ page }) => {
+  await page.route("**/functions/v1/registration", (route) => route.fulfill({ json: openPage() }));
+  await page.emulateMedia({ forcedColors: "active" });
+  await page.goto("/");
+  const selected = page.locator('[role="tab"][aria-selected="true"]');
+  const indicator = await selected.evaluate((tab) => {
+    const style = getComputedStyle(tab, "::after");
+    return { content: style.content, border: style.borderBlockEndStyle, width: style.borderBlockEndWidth };
+  });
+  expect(indicator).toEqual({ content: '\x22\x22', border: "solid", width: "3px" });
+  await page.emulateMedia({ forcedColors: "none" });
+  await expect(selected).toHaveCSS("background-color", "rgb(35, 98, 75)");
+  expect(await selected.evaluate((tab) => getComputedStyle(tab, "::after").content)).toBe("none");
+});
+
+test("public GET omits preflight-triggering headers while POST keeps its JSON headers", async ({ page }) => {
+  const requests = [];
+  await page.route("**/functions/v1/registration", async (route) => {
+    const request = route.request();
+    requests.push({ method: request.method(), headers: await request.allHeaders(),
+      body: request.method() === "POST" ? request.postDataJSON() : null });
+    await route.fulfill({ json: request.method() === "GET" ? openPage() : queried(true) });
+  });
+  await page.goto("/");
+  await expect(page.locator("#activities input")).toHaveCount(2);
+  expect(requests).toHaveLength(1);
+  expect(requests[0].method).toBe("GET");
+  expect(requests[0].headers).not.toHaveProperty("apikey");
+  expect(requests[0].headers).not.toHaveProperty("content-type");
+  expect(requests[0].headers).not.toHaveProperty("authorization");
+  await query(page);
+  await expect(page.locator("#start-edit")).toBeVisible();
+  expect(requests).toHaveLength(2);
+  expect(requests[1].method).toBe("POST");
+  expect(requests[1].headers.apikey).toBeTruthy();
+  expect(requests[1].headers["content-type"]).toBe("application/json");
+  expect(requests[1].body.action).toBe("query");
 });

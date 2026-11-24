@@ -19,13 +19,21 @@ h1, h2 { line-height: 1.25; }
 .notice, .message { padding: .75rem 1rem; border-radius: .6rem; background: #fff4d8; }
 .test-banner { margin: 0; padding: .5rem 1rem; color: #654c00; background: #fff4d8; font-weight: 700; text-align: center; }
 .message.error { color: #842525; background: #ffe9e9; }
+.message a { color: inherit; }
+/* app.js removes data-loading once the page data arrives. A rule here instead of the hidden attribute:
+   a reload right after a deploy can pair the new page with the cached old app.js and styles.css, and
+   the old styles.css then shows the forms that the old app.js would never un-hide. */
+#registration-service[data-loading] { display: none; }
 .field-invalid { color: #842525; font-weight: 700; }
 .field-invalid input:not([type="radio"]), .field-invalid select { border: 2px solid #a52828; }
 .field-invalid input[type="radio"] { accent-color: #a52828; }
 .hosting-question:has(+ .hosting-options.field-invalid) { color: #842525; font-weight: 700; }
 .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; border-bottom: 1px solid #d8e1dc; padding-bottom: .75rem; }
-.tabs button { margin: 0; min-width: 0; background: #fff; color: #23624b; border-color: transparent; }
+.tabs button { position: relative; margin: 0; min-width: 0; background: #fff; color: #23624b; border-color: transparent; }
 .tabs button[aria-selected="true"] { background: #23624b; color: #fff; }
+@media (forced-colors: active) {
+  .tabs button[aria-selected="true"]::after { content: ""; position: absolute; inset: auto .75rem .3rem; border-block-end: 3px solid currentColor; }
+}
 label, fieldset { display: block; margin: 1rem 0; }
 .identity-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 /* Reminders a registrant must not miss: blue blocks (decided 2026-11-10). A group of reminders whose
@@ -89,6 +97,16 @@ fieldset { padding: 0; border: 0; }
 .actions { display: grid; gap: .75rem; }
 .honeypot { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
 .button-link { display: block; margin-top: 1rem; padding: .7rem; border-radius: .5rem; text-align: center; text-decoration: none; }
+/* Confirmations (site/ui.js). The browser's dialog colour would ignore the page's text colour. */
+.confirm-dialog { width: min(100% - 2rem, 28rem); padding: 1.25rem; border: 0; border-radius: 1rem; color: inherit; background: #fff; box-shadow: 0 .5rem 2rem #173c2d40; }
+.confirm-dialog p { margin: 0 0 1rem; }
+.confirm-dialog-buttons { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.confirm-dialog-buttons button { margin: 0; }
+.confirm-dialog::backdrop { background: #173c2d66; }
+/* Chromium then keeps a scroll over the backdrop or inside the dialog from scrolling the page behind it;
+   Safari ignores these and still scrolls the page. */
+dialog:modal { overscroll-behavior: contain; }
+dialog::backdrop { overflow: hidden; overscroll-behavior: contain; }
 
 @media (min-width: 42rem) {
   /* 姓名／區／身分別 share one row on wide screens; on phones 身分別 wraps to the next row. */

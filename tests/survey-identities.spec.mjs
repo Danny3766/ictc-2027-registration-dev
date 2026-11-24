@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { answerConfirm, confirmDialog } from "./confirm-dialog.mjs";
 
 const reference = () => ({
   settings: { event_name: "接待測試", is_registration_open: true, is_lookup_open: true,
@@ -88,7 +89,6 @@ test("an invalidated pickup answer stays unanswered when 學生 changes to 兒�
 
 test("leaving and returning clears only the affected answer and cancel restores stored answers",async ({page})=>{
   const writes=[];
-  page.on("dialog", dialog => dialog.accept());
   await publicPage(page,reference(),record(),writes);
   await lookup(page); await page.locator("#start-edit").click();
   const identity=page.locator('#edit-form [name="meal_identity"]');
@@ -98,6 +98,7 @@ test("leaving and returning clears only the affected answer and cancel restores 
   await page.locator("#save-edit").click();
   await expect(page.locator("#page-message")).toContainText("是否可以開家接待");
   await page.locator("#cancel-edit").click();
+  await answerConfirm(page);
   await expect(page.locator("#edit-hosting")).toContainText("2 位");
   expect(writes).toHaveLength(0);
   await page.locator("#start-edit").click();
@@ -134,8 +135,6 @@ test("an identity round trip while closed retains history and persists the need 
 });
 
 test("a generated legacy no is unanswered when the identity is now eligible",async ({page})=>{
-  let asked=false;
-  page.on("dialog",dialog=>{asked=true; dialog.accept();});
   await publicPage(page,reference(),record({hosting:{status:"not_hosting",answer_valid:false}}));
   await lookup(page);
   await expect(page.locator("#edit-hosting")).toContainText("須重新回答");
@@ -145,7 +144,7 @@ test("a generated legacy no is unanswered when the identity is now eligible",asy
   // Leaving the invalidated answer unanswered is not an unsaved change.
   await page.locator("#cancel-edit").click();
   await expect(page.locator("#start-edit")).toBeVisible();
-  expect(asked).toBe(false);
+  await expect(confirmDialog(page)).toHaveCount(0);
 });
 
 test("legacy invalid answers stay hidden for an identity that cannot answer",async ({page})=>{
@@ -157,7 +156,6 @@ test("legacy invalid answers stay hidden for an identity that cannot answer",asy
 });
 
 test("passing through 請選擇 keeps the answers on the lookup and new registration forms",async ({page})=>{
-  page.on("dialog",dialog=>dialog.accept());
   await publicPage(page);
   const create=page.locator('#registration-form [name="meal_identity"]');
   await create.selectOption("general");

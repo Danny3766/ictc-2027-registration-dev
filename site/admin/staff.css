@@ -55,6 +55,11 @@ textarea { width: 100%; min-height: 6rem; padding: .65rem .75rem; border: 1px so
 .identity-filter-menu label.check:first-child { border-bottom: 1px solid #e5ebe8; }
 .staff-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
 .staff-actions button { margin-top: 0; }
+.registration-summary { display: flex; align-items: center; gap: .75rem; min-height: 1.6em; }
+.registration-summary progress { inline-size: 5rem; block-size: .75rem; flex: none; }
+#registration-rows button[aria-disabled="true"],
+#search-form button[type="submit"][aria-disabled="true"],
+#previous-page[aria-disabled="true"], #next-page[aria-disabled="true"], #clear-search[aria-disabled="true"] { opacity: .55; cursor: wait; }
 .pager { justify-content: center; }
 .pager span { white-space: nowrap; }
 

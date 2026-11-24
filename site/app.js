@@ -44,9 +44,9 @@ if (config?.environment === "test") Object.assign(document.querySelector("#test-
 // person on a shared device starts without the previous person's details.
 sessionStorage.removeItem("registration_success");
 
-function selectTab(tab) {
+async function selectTab(tab) {
   const current = tabs.find((item) => item.getAttribute("aria-selected") === "true");
-  if (tab !== current && hasUnsavedChanges() && !confirm("確定放棄尚未儲存的修改？")) return false;
+  if (tab !== current && hasUnsavedChanges() && !await Ui.confirm("確定放棄尚未儲存的修改？", "放棄修改")) return false;
   if (tab !== current && editMode) showConfirmation();
   if (tab !== current) clearValidation();
   for (const item of tabs) {
@@ -60,13 +60,13 @@ function selectTab(tab) {
 
 for (const tab of tabs) {
   tab.addEventListener("click", () => selectTab(tab));
-  tab.addEventListener("keydown", (event) => {
+  tab.addEventListener("keydown", async (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const next = event.key === "Home" ? tabs[0]
       : event.key === "End" ? tabs.at(-1)
       : tabs[(tabs.indexOf(tab) + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length];
-    if (selectTab(next)) next.focus();
+    if (await selectTab(next)) next.focus();
   });
 }
 
@@ -77,7 +77,7 @@ function showMessage(text, error = false, position = "form", scroll = true) {
   target.textContent = text;
   target.classList.toggle("error", error);
   target.hidden = false;
-  if (scroll) target.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (scroll) target.scrollIntoView({ behavior: Ui.scrollBehavior(), block: "center" });
 }
 
 function fieldName(control) {
@@ -92,7 +92,7 @@ function fieldName(control) {
 function clearValidation() {
   for (const form of [registrationForm, queryForm, editForm]) {
     form.querySelectorAll(".field-invalid").forEach((field) => field.classList.remove("field-invalid"));
-    form.querySelectorAll('[aria-invalid="true"]').forEach((field) => field.removeAttribute("aria-invalid"));
+    form.querySelectorAll('[aria-invalid="true"]').forEach((field) => field.setAttribute("aria-invalid", "false"));
   }
   if (validationForm) message.hidden = true;
   validationForm = null;
@@ -109,11 +109,34 @@ function updateValidation(form, focus = false, scroll = true) {
     (control.type === "radio" ? control.closest(".activity, .hosting-options") : control.closest("label"))
       ?.classList.add("field-invalid");
   }
-  showMessage(`請補填以下欄位：${[...new Set(invalid.map(fieldName))].join("、")}`, true, "form", scroll);
-  if (focus) invalid[0].focus({ preventScroll: true });
+  // One link per field, keyed by name: two activities may share a title yet each needs its own link.
+  const firstByName = new Map();
+  for (const control of invalid) if (!firstByName.has(control.name)) firstByName.set(control.name, control);
+  showMessage("請補填以下欄位：", true, "form", scroll);
+  // Each name jumps to its field, so keyboard users need not Tab through the whole form to reach it.
+  message.append(...[...firstByName.values()].flatMap((control, index) => {
+    const link = document.createElement("a");
+    link.href = "#";
+    link.textContent = fieldName(control);
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      control.focus();
+    });
+    return index ? ["、", link] : [link];
+  }));
+  // Focus goes to the list that was just scrolled into view; the first missing field can be far down
+  // the page, where a focus that does not scroll would leave it off screen. Its first link takes the
+  // focus, not the message: the message is a live region, so focusing it would read the list twice.
+  if (focus) message.querySelector("a").focus({ preventScroll: true });
 }
 
+// Firefox and Safari report an empty required field as invalid before any submit; "false" holds until
+// a failed submit marks what is missing. Fields drawn later (activities, surveys) get it as they appear.
+const markUnchecked = (form) => form.querySelectorAll(":is(input, select, textarea):not([aria-invalid])")
+  .forEach((control) => control.setAttribute("aria-invalid", "false"));
 for (const form of [registrationForm, queryForm, editForm]) {
+  markUnchecked(form);
+  new MutationObserver(() => markUnchecked(form)).observe(form, { childList: true, subtree: true });
   let pending = false;
   form.addEventListener("invalid", (event) => {
     event.preventDefault();
@@ -130,7 +153,7 @@ async function api(body) {
   if (!config?.supabaseUrl || !config?.publishableKey) throw new Error("網站尚未設定 Supabase 公開連線資訊");
   const response = await fetch(`${config.supabaseUrl}/functions/v1/registration`, {
     method: body ? "POST" : "GET",
-    headers: { apikey: config.publishableKey, "Content-Type": "application/json" },
+    headers: body ? { apikey: config.publishableKey, "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
   const result = await response.json().catch(() => ({}));
@@ -148,7 +171,7 @@ async function api(body) {
 function mapLink(value) {
   const url = Meals.mapUrl(value);
   if (!url) return "";
-  const href = escapeHtml(url).replaceAll('"', "&quot;");
+  const href = escapeHtml(url);
   return `<p class="hint"><a href="${href}" target="_blank" rel="noopener noreferrer">查看地圖</a></p>`;
 }
 
@@ -191,7 +214,7 @@ function activitySummaryFields(activities, values) {
 function escapeHtml(value) {
   const element = document.createElement("span");
   element.textContent = String(value ?? "");
-  return element.innerHTML;
+  return element.innerHTML.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function showProgram(program) {
@@ -568,9 +591,10 @@ async function loadPage() {
       registrationForm.querySelector("button[type=submit]").disabled = true;
       showMessage(pastDeadline ? "登記已截止。" : "登記目前尚未開放。", true, "notice");
     }
+    // Last, so any failure above leaves the forms hidden behind the catch's notice.
+    document.querySelector("#registration-service").removeAttribute("data-loading");
   } catch (error) {
-    registrationForm.hidden = true;
-    queryForm.hidden = true;
+    // The forms stay hidden: without the page data there is nothing to fill in or look up.
     showMessage(error.message, true, "notice");
   }
 }
@@ -731,8 +755,8 @@ for (const form of [registrationForm, queryForm, editForm]) {
     if (validationForm === form) updateValidation(form, false, false);
   });
 }
-cancelEditButton.addEventListener("click", () => {
-  if (hasUnsavedChanges() && !confirm("確定放棄尚未儲存的修改？")) return;
+cancelEditButton.addEventListener("click", async () => {
+  if (hasUnsavedChanges() && !await Ui.confirm("確定放棄尚未儲存的修改？", "放棄修改")) return;
   showConfirmation();
   showMessage("以下為目前登記內容。", false, "result");
 });

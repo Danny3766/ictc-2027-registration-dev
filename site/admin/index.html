@@ -13,6 +13,7 @@
     <script src="../hosting.js" defer></script>
     <script src="../pickup.js" defer></script>
     <script src="../meals.js" defer></script>
+    <script src="../ui.js" defer></script>
     <script src="./staff.js" defer></script>
   </head>
   <body>
@@ -23,7 +24,7 @@
       <section id="login-panel" class="card">
         <h2>服事者登入</h2>
         <form id="login-form" class="staff-form">
-          <label>帳號<input name="username" autocomplete="username" required /></label>
+          <label>帳號<input name="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required /></label>
           <label>密碼<input name="password" type="password" autocomplete="current-password" required /></label>
           <button type="submit">登入</button>
         </form>
@@ -67,7 +68,7 @@
             <button type="submit">搜尋</button>
             <button id="clear-search" type="button" class="secondary" disabled>清除條件</button>
           </form>
-          <p id="registration-count"></p>
+          <p class="registration-summary"><span id="registration-count"></span><progress id="registration-loading" aria-label="正在載入登記名單" hidden></progress></p>
           <p class="hint family-hint"><strong>親子：</strong>兒童顯示登記時填寫的家長姓名；家長顯示同區有效登記中對應的兒童姓名。</p>
           <div class="table-scroll"><table id="registration-table"><thead><tr><th>流水號</th><th>姓名</th><th>區</th><th>狀態</th><th>匯入大會</th><th>更新時間</th><th>親子</th><th>操作</th></tr></thead><tbody id="registration-rows"></tbody></table></div>
           <div class="staff-actions pager"><button id="previous-page" type="button" class="secondary">上一頁</button><span id="page-number"></span><button id="next-page" type="button" class="secondary">下一頁</button></div>
@@ -178,9 +179,11 @@
         <section id="admin-accounts" class="card" data-view="admin-accounts" hidden>
           <h2>服事者帳號</h2>
           <p class="hint">密碼由管理員設定並私下交付，服事者不需再更改；替其他管理員設定的密碼，對方下次登入須改成自己的。請勿透過群組訊息傳送密碼。</p>
+          <!-- Usernames: the server lowercases them, so capitals pass here; "-" is escaped because browsers
+               compile pattern with the v flag, where an unescaped "-" makes the pattern invalid and ignored. -->
           <form id="create-staff-form" class="staff-form compact-form">
             <div class="field-row">
-              <label>帳號<input name="username" minlength="3" maxlength="31" pattern="[a-z][a-z0-9_-]*" autocomplete="off" required /></label>
+              <label>帳號<input name="username" minlength="3" maxlength="31" pattern="[A-Za-z][A-Za-z0-9_\-]*" title="英文字母開頭，只能用英文字母、數字、_ 或 -" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required /></label>
               <label>顯示名稱<input name="display_name" maxlength="100" required /></label>
               <label>角色<select name="role"><option value="staff">服事者</option><option value="admin">管理員</option></select></label>
               <label>密碼（至少 12 字元）<input name="password" type="password" minlength="12" maxlength="72" autocomplete="new-password" data-1p-ignore data-lpignore="true" required /></label>
@@ -192,7 +195,7 @@
             <section class="mini-card">
               <h3 id="staff-editor-title">修改帳號</h3>
               <form id="edit-staff-form" class="staff-form">
-                <label>帳號（改名後須用新帳號登入）<input name="username" minlength="3" maxlength="31" pattern="[a-z][a-z0-9_-]*" autocomplete="off" required /></label>
+                <label>帳號（改名後須用新帳號登入）<input name="username" minlength="3" maxlength="31" pattern="[A-Za-z][A-Za-z0-9_\-]*" title="英文字母開頭，只能用英文字母、數字、_ 或 -" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required /></label>
                 <label>顯示名稱<input name="display_name" maxlength="100" required /></label>
                 <div class="form-buttons"><button type="submit">儲存帳號</button><button id="close-staff-editor" type="button" class="secondary">關閉</button></div>
               </form>
@@ -284,6 +287,7 @@
         </section>
 
         <section id="admin-activities" class="card" data-view="admin-activities" hidden>
+          <p id="activity-reorder-status" class="visually-hidden" role="status"></p>
           <h2>活動</h2>
           <p id="reorder-hint" class="hint" hidden>拖曳右側 ☰ 調整順序，或聚焦 ☰ 後按 ↑ ↓；完成後按「完成排序」儲存。</p>
           <div class="table-scroll"><table><thead><tr><th>名稱</th><th>類型</th><th>時間</th><th>公開</th><th>操作</th>

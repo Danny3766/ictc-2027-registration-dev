@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validImportStatusFilter, filterImportStatus, validChild, childrenByParent, attachRegistrationChildren } from "./index.ts";
+import { handler, readRequestJson, isWeakPassword, nameKey, sameUser, validPassword, validUsername, validMealIdentity, validDistrictFilter, validImportStatusFilter, filterImportStatus, validChild, childrenByParent, attachRegistrationChildren } from "./index.ts";
 
 test("JSON bodies enforce the byte limit while reading", async () => {
   const payload = '"' + "a".repeat(63_998) + '"';
@@ -153,4 +153,20 @@ test("family enrichment gets names and links in one request and preserves a fail
   assert.equal(await attachRegistrationChildren({ rpc: async () => ({ data: null, error }) }, rows), error);
   assert.deepEqual(rows[0].children, [{ serial_no: 3, full_name: "child" }]);
   assert.equal(await attachRegistrationChildren({ rpc: () => assert.fail("no parents") }, []), null);
+});
+
+test("CORS preflight caches permissions for two hours without requiring authentication", async () => {
+  const reply = await handler(new Request("https://example.test", {
+    method: "OPTIONS",
+    headers: { Origin: "https://example.github.io", "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "apikey, authorization, content-type" },
+  }));
+  assert.equal(reply.status, 204);
+  assert.equal(reply.headers.get("Access-Control-Max-Age"), "7200");
+  assert.equal(reply.headers.get("Access-Control-Allow-Origin"), "*");
+  assert.match(reply.headers.get("Access-Control-Allow-Methods"), /POST/);
+  assert.match(reply.headers.get("Access-Control-Allow-Headers"), /apikey/);
+  assert.match(reply.headers.get("Access-Control-Allow-Headers"), /authorization/);
+  assert.match(reply.headers.get("Access-Control-Allow-Headers"), /content-type/);
+  assert.equal(await reply.text(), "");
 });

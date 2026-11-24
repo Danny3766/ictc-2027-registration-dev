@@ -1,6 +1,36 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { statisticsFixture } from "./statistics-fixture.mjs";
+import { answerConfirm, confirmDialog } from "./confirm-dialog.mjs";
+
+async function settle(page) {
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+}
+
+async function holdListRequests(page, onRequest) {
+  await page.route("**/functions/v1/staff", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "list_registrations") {
+      onRequest(route, body);
+      return;
+    }
+    await route.fallback();
+  });
+}
+
+// A new list load replaces registrationRequest synchronously, unlike a route handler that may run later,
+// so a mark on the current one shows that no load began.
+async function markListRequest(page) {
+  await page.evaluate(() => { registrationRequest.marked = true; });
+}
+const listRequestKept = (page) => page.evaluate(() => registrationRequest?.marked === true);
+
+async function finishListRequest(page, route, reply) {
+  const response = page.waitForResponse((response) => response.request() === route.request());
+  await route.fulfill(reply);
+  await response;
+  await settle(page);
+}
 
 // The Edge Function sends the identities and each activity's identity prices; fixtures written
 // before them get the defaults (an activity's student price becomes its student identity price).
@@ -184,7 +214,7 @@ test("a slower earlier detail load cannot replace or fail the record opened afte
   const stale = page.waitForResponse((response) => response.request().postDataJSON()?.registration_id === people[0].id);
   await slow.fulfill({ status: 404, json: { error: "找不到登記紀錄" } });
   await stale;
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await settle(page);
   await expect(page.locator("#detail-title")).toContainText("乙");
   await expect(page.locator("#message")).not.toHaveText("找不到登記紀錄");
 });
@@ -559,7 +589,6 @@ test("admins set another account's password, but change their own with the curre
     list_staff: twoAccounts,
     set_staff_password: () => ({ json: { success: true } }),
   });
-  page.on("dialog", (dialog) => dialog.accept());
   await login(page, "帳號");
   const rows = page.locator("#staff-rows tr");
   await expect(rows).toHaveCount(2);
@@ -577,6 +606,7 @@ test("admins set another account's password, but change their own with the curre
   expect(sent).toHaveLength(0);
   await passwordForm.locator('input[name="password"]').fill("new-staff-password-1");
   await passwordForm.getByRole("button", { name: "設定密碼" }).click();
+  await answerConfirm(page);
   await expect(page.locator("#message")).toHaveText("密碼已設定。請以安全方式私下交付。");
   expect(sent).toEqual([{ action: "set_staff_password", user_id: other, password: "new-staff-password-1" }]);
   await expect(passwordForm.locator('input[name="password"]')).toHaveValue("");
@@ -592,7 +622,15 @@ test("admins create accounts with a password and no district, and rename them", 
   await login(page, "帳號");
   const create = page.locator("#create-staff-form");
   await expect(create.locator('select[name="district_id"]')).toHaveCount(0);
-  await create.locator('input[name="username"]').fill("newhelper");
+  // The format check really applies (an unescaped "-" once made browsers drop it); capitals pass, since
+  // the server lowercases, so a phone keyboard's automatic capital is not refused.
+  const username = create.locator('input[name="username"]');
+  await expect(username).toHaveAttribute("autocapitalize", "none");
+  for (const [value, valid] of [["1helper", false], ["new.helper", false], ["New-helper_2", true]]) {
+    await username.fill(value);
+    expect(await username.evaluate((input) => input.checkValidity())).toBe(valid);
+  }
+  await username.fill("newhelper");
   await create.locator('input[name="display_name"]').fill("新服事者");
   await create.locator('input[name="password"]').fill("new-staff-password-1");
   await create.getByRole("button", { name: "建立帳號" }).click();
@@ -603,11 +641,14 @@ test("admins create accounts with a password and no district, and rename them", 
   await page.locator("#staff-rows tr").nth(1).getByRole("button", { name: "修改" }).click();
   const edit = page.locator("#edit-staff-form");
   await expect(edit.locator('input[name="username"]')).toHaveValue("other");
-  await edit.locator('input[name="username"]').fill("renamed");
+  await edit.locator('input[name="username"]').fill("Renamed");
   await edit.locator('input[name="display_name"]').fill("改名後");
   await edit.getByRole("button", { name: "儲存帳號" }).click();
   await expect(page.locator("#message")).toHaveText("帳號已更新，之後請用新帳號名稱登入。");
-  expect(sent[1]).toEqual({ action: "update_staff", user_id: other, username: "renamed", display_name: "改名後" });
+  expect(sent[1]).toEqual({ action: "update_staff", user_id: other, username: "Renamed", display_name: "改名後" });
+  // The server lowercases it, and the field shows the name as saved.
+  await expect(edit.locator('input[name="username"]')).toHaveValue("renamed");
+  await expect(page.locator("#staff-editor-title")).toHaveText("修改帳號：renamed");
   await page.getByRole("button", { name: "關閉", exact: true }).click();
   await expect(page.locator("#staff-editor")).toBeHidden();
 });
@@ -731,16 +772,78 @@ test("voiding a registration requires a reason and sends it", async ({ page }) =
   await mockStaff(page, "staff", (payload) => { if (payload.action === "void_registration") voided = payload; }, "測試登記", {
     void_registration: () => ({ json: { success: true } }),
   });
-  page.on("dialog", (dialog) => dialog.accept());
   await login(page);
   await page.getByRole("button", { name: "查看／處理" }).click();
   const form = page.locator("#void-form");
   await form.getByRole("button", { name: "作廢此登記" }).click();
+  await expect(confirmDialog(page)).toHaveCount(0);
   expect(voided).toBeUndefined();
   await form.locator('input[name="reason"]').fill("  填錯了  ");
   await form.getByRole("button", { name: "作廢此登記" }).click();
+  // Cancel keeps the record; only the dialog's 作廢 sends it.
+  await answerConfirm(page, false);
+  expect(voided).toBeUndefined();
+  await form.getByRole("button", { name: "作廢此登記" }).click();
+  // Cancel takes the first focus, so an Enter right after the click does not void; the other button says 作廢.
+  await expect(confirmDialog(page).getByRole("button", { name: "取消" })).toBeFocused();
+  await expect(confirmDialog(page).locator('button[value="confirm"]')).toHaveText("作廢");
+  await answerConfirm(page);
   await expect(page.locator("#message")).toHaveText("登記已作廢。");
   expect(voided).toEqual({ action: "void_registration", registration_id: "223e4567-e89b-42d3-a456-426614174000", reason: "填錯了" });
+});
+
+test("a record that loads while the void confirmation is open is not voided in place of the one confirmed", async ({ page }) => {
+  const actions = [];
+  await mockStaff(page, "staff", (payload) => actions.push(payload.action), "測試登記", mealReplies());
+  await login(page);
+  const rows = page.locator("#registration-rows tr");
+  await rows.nth(0).getByRole("button", { name: "查看／處理" }).click();
+  const name = page.locator('#edit-registration-form input[name="full_name"]');
+  await expect(name).toHaveValue("甲");
+
+  // 乙's details are held back until 甲's void confirmation is open.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "get_registration") await held;
+    await route.fallback();
+  });
+  await rows.nth(1).getByRole("button", { name: "查看／處理" }).click();
+  await page.locator('#void-form input[name="reason"]').fill("填錯了");
+  await page.locator("#void-form").getByRole("button", { name: "作廢此登記" }).click();
+  await expect(confirmDialog(page)).toBeVisible();
+  release();
+  await expect(name).toHaveValue("乙");
+  await answerConfirm(page);
+  await expect(page.locator("#message")).toHaveText("開啟的登記已換成另一筆，未作廢。");
+  expect(actions).not.toContain("void_registration");
+});
+
+test("a login that expires while a confirmation is open closes it as 取消", async ({ page }) => {
+  const actions = [];
+  await mockStaff(page, "staff", (payload) => actions.push(payload.action), "測試登記", mealReplies());
+  await login(page);
+  const rows = page.locator("#registration-rows tr");
+  await rows.nth(0).getByRole("button", { name: "查看／處理" }).click();
+  await expect(page.locator('#edit-registration-form input[name="full_name"]')).toHaveValue("甲");
+
+  // The next detail load meets an expired login only after the void confirmation is open.
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action !== "get_registration") return route.fallback();
+    await held;
+    await route.fulfill({ status: 401, json: { error: "登入已過期，請重新登入" } });
+  });
+  await rows.nth(1).getByRole("button", { name: "查看／處理" }).click();
+  await page.locator('#void-form input[name="reason"]').fill("填錯了");
+  await page.locator("#void-form").getByRole("button", { name: "作廢此登記" }).click();
+  await expect(confirmDialog(page)).toBeVisible();
+  release();
+  await expect(confirmDialog(page)).toHaveCount(0);
+  await expect(page.locator("#login-panel")).toBeVisible();
+  await expect(page.locator("#message")).toHaveText("登入已過期，請重新登入");
+  expect(actions).not.toContain("void_registration");
 });
 
 test("a message from before login is cleared once login succeeds", async ({ page }) => {
@@ -966,6 +1069,8 @@ test("activities can be reordered by dragging or arrow keys and saved together",
   await handles.nth(0).focus();
   await page.keyboard.press("ArrowDown");
   expect(await activityTitles(page)).toEqual(["活動乙", "活動甲", "活動丙"]);
+  // Screen readers hear the title and new place, not the details list in the same cell.
+  await expect(page.locator("#activity-reorder-status")).toHaveText("活動甲，第 2 位");
 
   // Drag 活動丙 above the first row with pointer moves. Center the table first so the sticky
   // navigation bar does not cover the rows.
@@ -983,6 +1088,8 @@ test("activities can be reordered by dragging or arrow keys and saved together",
   expect(saved.activity_ids).toEqual([3, 2, 1]);
   await expect(page.getByRole("button", { name: "調整排序" })).toBeVisible();
   await expect(numbers).toHaveText(["1", "2", "3"]);
+  // Emptied, so the same move in the next session is announced again.
+  await expect(page.locator("#activity-reorder-status")).toHaveText("");
 });
 
 test("cancelling a reorder restores the order without saving", async ({ page }) => {
@@ -1127,10 +1234,15 @@ test("success messages float at the bottom and leave after 5 seconds; errors sta
   await login(page, "網站設定");
   await page.getByRole("button", { name: "儲存網站設定" }).click();
   await expect(page.locator("#message")).toHaveText("設定已儲存。");
-  await expect(page.getByRole("status")).toHaveText("設定已儲存。");
+  await expect(page.locator("#message-live")).toHaveText("設定已儲存。");
   const box = await page.locator("#toast").boundingBox();
   expect(box.y + box.height).toBeGreaterThan(page.viewportSize().height - 40);
+  await page.locator("#message-close").focus();
   await page.clock.fastForward(6000);
+  await expect(page.locator("#toast")).toBeVisible();
+  await expect(page.locator("#message-close")).toBeFocused();
+  await page.getByRole("button", { name: "儲存網站設定" }).focus();
+  await page.clock.fastForward(1000);
   await expect(page.locator("#message")).toBeHidden();
 
   await go(page, "活動");
@@ -1305,19 +1417,25 @@ test("a record opens locked for viewing; 修改登記資料 unlocks it and 取�
   await expect(startEdit).toBeFocused();
 });
 
+const paginationList = (page = 0) => ({ count: 11, registrations: Array.from({ length: page === 0 ? 10 : 1 }, (_, index) => ({
+  ...loadingList("測試登記").registrations[0], serial_no: page * 10 + index + 1,
+})) });
+
 test("the registration list shows 10 rows a page and names the import column 匯入大會", async ({ page }) => {
   const pages = [];
   await mockStaff(page, "staff", (payload) => {
     // before_serial requests are the full export for statistics, not the paged list.
     if (payload.action === "list_registrations" && payload.before_serial === undefined) pages.push(payload.page);
   }, "測試登記", {
-    list_registrations: () => ({ json: { count: 11, registrations: [] } }),
+    list_registrations: ({ page }) => ({ json: paginationList(page) }),
   });
   await login(page);
   await expect(page.locator("#registration-table th").nth(4)).toHaveText("匯入大會");
+  await expect(page.locator("#registration-rows tr")).toHaveCount(10);
   await expect(page.locator("#next-page")).toBeEnabled();
   await page.locator("#next-page").click();
   await expect(page.locator("#page-number")).toHaveText("第 2 頁");
+  await expect(page.locator("#registration-rows tr")).toHaveCount(1);
   await expect(page.locator("#next-page")).toBeDisabled();
   expect(pages).toEqual([0, 1]);
 });
@@ -1327,7 +1445,7 @@ test("the import status filter combines with list conditions, survives paging, a
   await mockStaff(page, "staff", (payload) => {
     if (payload.action === "list_registrations" && payload.before_serial === undefined) lists.push(payload);
   }, "測試登記", {
-    list_registrations: () => ({ json: { count: 11, registrations: [] } }),
+    list_registrations: ({ page }) => ({ json: paginationList(page) }),
   });
   await login(page);
   const form = page.locator("#search-form");
@@ -1373,7 +1491,7 @@ test("the registration list filters by 區 together with the name, keeps both wh
         failNext = false;
         return { status: 503, json: { error: "名單載入失敗" } };
       }
-      return { json: { count: 11, registrations: [] } };
+      return { json: paginationList(payload.page) };
     },
   });
   await login(page);
@@ -1441,7 +1559,7 @@ test("an expired login while paging a 區 search does not hand the conditions to
       lists.push(payload);
       // The search works; the next page meets an expired login, while the search is the applied condition.
       if (payload.page === 1) return { status: 401, json: { error: "登入已過期，請重新登入" } };
-      return { json: { count: 11, registrations: [] } };
+      return { json: paginationList(payload.page) };
     },
   });
   await login(page);
@@ -1555,12 +1673,12 @@ test("CSV adds the hosting and meal columns", async ({ page }, testInfo) => {
 test("admins save the hosting switch and description from their own card", async ({ page }) => {
   let saved;
   await mockStaff(page, "admin", (payload) => { if (payload.action === "save_reference") saved = payload; });
-  page.on("dialog", (dialog) => dialog.accept());
   await login(page, "開家與接機接待");
   const form = page.locator("#hosting-settings-form");
   await form.getByLabel("開放開家接待調查").check();
   await form.locator('textarea[name="hosting_description"]').fill("接待期間 2/19～2/22");
   await form.getByRole("button", { name: "儲存接待設定" }).click();
+  await answerConfirm(page);
   await expect(page.locator("#message")).toHaveText("設定已儲存。");
   expect(saved).toEqual({ action: "save_reference", kind: "hosting", data: {
     is_hosting_open: true, hosting_description: "接待期間 2/19～2/22", is_pickup_open: false, pickup_description: "",
@@ -1680,12 +1798,12 @@ test("a password set for another admin must be changed at their next login", asy
     ] } }),
     set_staff_password: () => ({ json: { success: true, must_change_password: true } }),
   });
-  page.on("dialog", (dialog) => dialog.accept());
   await login(page, "帳號");
   await page.locator("#staff-rows tr").nth(1).getByRole("button", { name: "修改" }).click();
   const form = page.locator("#staff-password-form");
   await form.locator('input[name="password"]').fill("new-admin-password-1");
   await form.getByRole("button", { name: "設定密碼" }).click();
+  await answerConfirm(page);
   await expect(page.locator("#message")).toHaveText("密碼已設定。對方是管理員，下次登入時須改成自己的密碼；請以安全方式私下交付。");
 });
 
@@ -1848,14 +1966,11 @@ test("the activity form saves prices, cost and audience, and confirms restrictin
   await form.locator('input[name="audience_note"]').fill("限有開家接待的家庭");
 
   // 乙 signed up and has no hosting answer, so restricting the lunch leaves one sign-up outside it.
-  const asked = [];
-  page.once("dialog", (dialog) => { asked.push(dialog.message()); return dialog.dismiss(); });
   await form.getByRole("button", { name: /^儲存活動/ }).click();
-  await expect.poll(() => asked.length).toBe(1);
-  expect(asked[0]).toContain("目前有 1 位不符對象的人已報名此活動，他們的報名會保留。");
+  expect(await answerConfirm(page, false)).toContain("目前有 1 位不符對象的人已報名此活動，他們的報名會保留。");
   expect(saved).toHaveLength(0);
-  page.once("dialog", (dialog) => dialog.accept());
   await form.getByRole("button", { name: /^儲存活動/ }).click();
+  await answerConfirm(page);
   await expect(page.locator("#message")).toHaveText("設定已儲存。");
   expect(saved[0]).toMatchObject({ id: "1", fee_amount: "120", student_fee_amount: 70, cost_amount: "150",
     audience: "hosting", audience_note: "限有開家接待的家庭" });
@@ -1890,14 +2005,11 @@ test("staff saving a sign-up from before a restriction confirm that it becomes �
   await expect(page.locator("#detail-choices .meal-identity")).toBeHidden();
   await page.locator('#edit-registration-form input[name="full_name"]').fill("乙更正");
 
-  const asked = [];
-  page.once("dialog", (dialog) => { asked.push(dialog.message()); return dialog.dismiss(); });
   await page.getByRole("button", { name: "儲存登記" }).click();
-  await expect.poll(() => asked.length).toBe(1);
-  expect(asked[0]).toBe("這筆登記有 1 項限定活動不符報名對象，儲存後會改為不參加。確定儲存？");
+  expect(await answerConfirm(page, false)).toBe("這筆登記有 1 項限定活動不符報名對象，儲存後會改為不參加。確定儲存？");
   expect(saved).toBeUndefined();
-  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "儲存登記" }).click();
+  await answerConfirm(page);
   await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
   expect(saved.choices).toEqual([{ activity_id: 1, attending: false }, { activity_id: 2, attending: false }, { activity_id: 3, attending: false }]);
   expect(saved.meal_identity).toBe("general");
@@ -1907,8 +2019,6 @@ test("an unanswered restricted activity stays 未回覆 when staff save an older
   let saved;
   await mockStaff(page, "staff", (payload) => { if (payload.action === "save_registration") saved = payload; }, "測試登記",
     mealReplies([mealRegistration(3, "乙", { 2: false, 3: false }, null, "general")]));
-  const dialogs = [];
-  page.on("dialog", (dialog) => { dialogs.push(dialog.message()); return dialog.dismiss(); });
   await login(page);
   await page.getByRole("button", { name: "查看／處理" }).click();
   const lunch = page.locator('#detail-choices [data-activity="1"]');
@@ -1920,7 +2030,7 @@ test("an unanswered restricted activity stays 未回覆 when staff save an older
   await expect(page.locator("#message")).toHaveText("登記資料已儲存。");
   // Nothing about the lunch is sent, so the save changes no answer, and there was nothing to confirm.
   expect(saved.choices).toEqual([{ activity_id: 2, attending: false }, { activity_id: 3, attending: false }]);
-  expect(dialogs).toEqual([]);
+  await expect(confirmDialog(page)).toHaveCount(0);
 });
 
 test("協助登記 follows the audience and asks the identity for a student-priced meal", async ({ page }) => {
@@ -2150,8 +2260,11 @@ test("the 身分別 checklist filters by several identities and 未填身分, wi
   const boxes = form.locator('[name="identity_filter"]');
   const unfiltered = { action: "list_registrations", summary: true, page: 0, search: "" };
   // 身分別 sits after 區, level with the boxes, on a wide screen.
+  await expect(summary).toBeVisible();
   await expect(summary).toHaveText("全部身分");
   if (page.viewportSize().width > 700) {
+    // toHaveText passes while the search panel is still hidden, when boundingBox() would be null.
+    await expect(summary).toBeVisible();
     const [district, box] = await Promise.all([form.locator('select[name="district_id"]').boundingBox(), summary.boundingBox()]);
     expect(box.x).toBeGreaterThan(district.x + district.width);
     const middle = box.y + box.height / 2;
@@ -2537,8 +2650,8 @@ test("admins manage meal identities, and prices typed into the activity form sur
 
   // An unused identity can be deleted; 一般 can only be renamed.
   await go(page, "身分別");
-  page.once("dialog", (dialog) => dialog.accept());
   await page.locator("#identity-rows tr").filter({ hasText: "服事者" }).getByRole("button", { name: "刪除" }).click();
+  await answerConfirm(page);
   await expect(page.locator("#identity-rows")).not.toContainText("服事者");
   // 學生 is reserved too, yet stays selectable as the 學生統計身分.
   const student = page.locator("#identity-rows tr").filter({ hasText: "學生" });
@@ -2620,4 +2733,1129 @@ test("協助登記 shows the child reminders as a blue block and the survey pane
   await expect(form.locator(".hosting-panel")).toBeHidden();
   await identity.selectOption("general");
   await expect(form.locator(".hosting-panel")).toBeVisible();
+});
+
+for (const [kind, view, rowsId, reorderId, cancelId, statusId] of [
+  ["activity", "活動", "#activity-rows", "#reorder-activities", "#cancel-reorder", "#activity-reorder-status"],
+  ["identity", "身分別", "#identity-rows", "#reorder-identities", "#cancel-identity-reorder", "#identity-reorder-status"],
+]) {
+  test(`${kind} reorder announces its name and position`, async ({ page }) => {
+    await mockStaff(page, "admin", () => {}, "test", threeActivities);
+    await login(page, view);
+    await page.locator(reorderId).click();
+    const name = await page.locator(`${rowsId} tr`).first().locator(kind === "activity" ? "summary" : "td").first().textContent();
+    await page.locator(`${rowsId} .drag-handle`).first().press("ArrowDown");
+    await expect(page.locator(statusId)).toHaveText(`${name}，第 2 位`);
+  });
+
+  // Leaving redraws the activity rows even when unchanged, so only 身分別 keeps a row the timer could still name.
+  for (const action of ["cancel", "save", "slow save", ...(kind === "identity" ? ["unchanged"] : [])]) {
+    test(`${kind} reorder suppresses stale announcements after quick ${action}`, async ({ page }) => {
+      await mockStaff(page, "admin", () => {}, "test", {
+        ...threeActivities,
+        reorder_activities: () => ({ json: { success: true } }),
+        reorder_identities: () => ({ json: { success: true } }),
+      });
+      let saving;
+      if (action === "slow save") {
+        await page.route("**/functions/v1/staff", async (route) => {
+          if (route.request().postDataJSON().action.startsWith("reorder_")) { saving = route; return; }
+          await route.fallback();
+        });
+      }
+      await login(page, view);
+      await page.clock.install();
+      await page.clock.pauseAt(new Date(Date.now() + 1000));
+      await page.locator(reorderId).click();
+      await page.evaluate(({ rowsId, exitId, action }) => {
+        const handle = document.querySelector(`${rowsId} .drag-handle`);
+        handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        if (action === "unchanged") handle.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+        document.querySelector(exitId).click();
+      }, { rowsId, exitId: action === "cancel" ? cancelId : reorderId, action });
+      if (action === "slow save") {
+        // The section stays in reordering mode until the save answers.
+        await expect.poll(() => Boolean(saving)).toBe(true);
+        // A move now would never be sent, so the rows stay still until the save answers.
+        expect(await page.locator(rowsId).evaluate((rows) => rows.inert)).toBe(true);
+        await page.clock.fastForward(1000);
+        await expect(page.locator(statusId)).toBeEmpty();
+        await saving.fulfill({ json: { success: true } });
+      }
+      await expect(page.locator(reorderId)).toHaveText("調整排序");
+      await page.clock.fastForward(1000);
+      await expect(page.locator(statusId)).toBeEmpty();
+    });
+  }
+}
+
+test("staff survey fields preserve native validation without a fixed aria-invalid state", async ({ page }) => {
+  const data = threeActivities.list_reference().json;
+  data.settings = { ...data.settings, is_hosting_open: true, is_pickup_open: true };
+  await mockStaff(page, "admin", () => {}, "test", { list_reference: () => ({ json: data }) });
+  await login(page, "協助登記");
+  const form = page.locator("#new-registration-form");
+  await form.locator('[name="meal_identity"]').selectOption("general");
+  const surveys = form.locator('[name="hosting_status"], [name="pickup_status"], [name="guest_count"], [name="guest_type"], [name="pickup_count"]');
+  await expect(surveys).toHaveCount(8);
+  await expect(surveys.locator('xpath=self::*[@aria-invalid]')).toHaveCount(0);
+  expect(await surveys.first().evaluate((control) => control.required && !control.validity.valid)).toBe(true);
+});
+
+for (const total of [0, 1, 10, 11]) {
+  test(`the registration count shows the displayed row range for ${total} records`, async ({ page }) => {
+    const registrations = Array.from({ length: total }, (_, index) => ({
+      ...loadingList(`person ${index + 1}`).registrations[0],
+      serial_no: index + 1,
+    }));
+    await mockStaff(page, "staff", () => {}, "original", {
+      list_registrations: ({ page = 0 }) => ({
+        json: { count: total, registrations: registrations.slice(page * 10, (page + 1) * 10) },
+      }),
+    });
+    await login(page);
+    const summary = page.locator("#registration-count");
+    await expect(summary).toHaveText(total ? (total === 1 ? "共 1 筆，目前第 1 筆" : `共 ${total} 筆，目前第 1 至 ${Math.min(total, 10)} 筆`) : "共 0 筆");
+    if (total > 10) {
+      await page.locator("#next-page").click();
+      await expect(summary).toHaveText("共 11 筆，目前第 11 筆");
+      await page.locator("#previous-page").click();
+      await expect(summary).toHaveText("共 11 筆，目前第 1 至 10 筆");
+    }
+  });
+}
+
+const loadingList = (name, count = 21) => ({ count, registrations: [{
+  id: "223e4567-e89b-42d3-a456-426614174000", serial_no: 1, full_name: name, district_id: 1,
+  record_status: "active", import_status: "pending", meal_identity: "general", registration_choices: [], children: [],
+  updated_at: "2026-11-04T00:00:00Z",
+}] });
+
+test("a rejected token refresh during list loading restores controls and reports expiry", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original");
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await page.route("**/auth/v1/token?grant_type=refresh_token", (route) => route.fulfill({ status: 400, json: {} }));
+  await page.evaluate(() => { session.expires_at = Date.now(); });
+  await page.locator('#search-form [name="search"]').fill("expired");
+  await page.locator('#search-form button[type="submit"]').click();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  await expect(page.locator("#message")).toHaveText("登入已過期，請重新登入");
+  await expect(page.locator("#registration-loading")).toBeHidden();
+  await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+});
+
+test("list loading disables actions and preserves displayed rows until the response arrives", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: () => ({ json: loadingList("original") }),
+  });
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  const tableTop = () => page.locator("#registration-table").evaluate((table) => table.getBoundingClientRect().top + window.scrollY);
+  const topBeforeLoading = await tableTop();
+  let pending;
+  let requests = 0;
+  await holdListRequests(page, (route) => { pending = route; requests++; });
+  await page.locator('#search-form [name="search"]').fill("found");
+  await page.locator('#search-form button[type="submit"]').click();
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "true");
+  await expect(page.locator("#registration-loading")).toBeVisible();
+  expect(Math.abs(await tableTop() - topBeforeLoading)).toBeLessThan(1);
+  await expect(page.locator("#registration-loading")).not.toHaveAttribute("value");
+  for (const selector of ['#search-form button[type="submit"]', "#previous-page", "#next-page", "#clear-search"]) {
+    await expect(page.locator(selector)).toHaveAttribute("aria-disabled", "true");
+  }
+  await page.locator('#search-form [name="search"]').fill("typed while loading");
+  await expect(page.locator("#clear-search")).toHaveAttribute("aria-disabled", "true");
+  // Enter in the field cannot announce the button's state, so the ignored search says why.
+  await markListRequest(page);
+  await page.locator('#search-form [name="search"]').press("Enter");
+  await expect(page.locator("#message")).toHaveText("名單載入中，請等載入完成後再查詢。");
+  expect(await listRequestKept(page)).toBe(true);
+  expect(requests).toBe(1);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await pending.fulfill({ json: loadingList("found") });
+  await expect(page.locator("#registration-rows")).toContainText("found");
+  await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+  await expect(page.locator("#registration-loading")).toBeHidden();
+  expect(Math.abs(await tableTop() - topBeforeLoading)).toBeLessThan(1);
+  await expect(page.locator('#search-form button[type="submit"]')).toBeEnabled();
+  await expect(page.locator("#clear-search")).toBeEnabled();
+  await expect(page.locator("#clear-search")).not.toHaveAttribute("aria-disabled");
+  await expect(page.locator("#previous-page")).toBeDisabled();
+  await expect(page.locator("#next-page")).toBeEnabled();
+});
+
+for (const status of [200, 503]) {
+  for (const order of ["old-first", "new-first"]) {
+    test(`list request ordering ignores stale ${status} responses: ${order}`, async ({ page }) => {
+      await mockStaff(page, "staff", () => {}, "original", {
+        list_registrations: () => ({ json: loadingList("original") }),
+      });
+      await login(page);
+      await expect(page.locator("#registration-rows")).toContainText("original");
+      const pending = {};
+      await holdListRequests(page, (route, body) => { pending[body.search] = route; });
+      // Internal refreshes can overlap even though the visible search and paging buttons are disabled.
+      await page.evaluate(() => { void showRegistrations(0, "old"); });
+      await expect.poll(() => Boolean(pending.old)).toBe(true);
+      await page.evaluate(() => { void showRegistrations(1, "new"); });
+      await expect.poll(() => Boolean(pending.new)).toBe(true);
+      const finishOld = async () => {
+        const response = page.waitForResponse((reply) => reply.request().postDataJSON()?.search === "old");
+        await pending.old.fulfill({ status, json: status === 200 ? loadingList("obsolete", 99) : { error: "obsolete failure" } });
+        await response;
+        await settle(page);
+      };
+      if (order === "old-first") {
+        await finishOld();
+        await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "true");
+        await expect(page.locator("#registration-rows")).toContainText("original");
+      }
+      await pending.new.fulfill({ json: loadingList("latest") });
+      await expect(page.locator("#registration-rows")).toContainText("latest");
+      if (order === "new-first") await finishOld();
+      await expect(page.locator("#registration-count")).toContainText("21");
+      await expect(page.locator("#page-number")).toContainText("2");
+      await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+      await expect(page.locator("#previous-page")).toBeEnabled();
+      await expect(page.locator("#message")).not.toHaveText("obsolete failure");
+      // Paging must use the accepted search rather than the stale request's conditions.
+      await page.locator("#next-page").click();
+      await expect.poll(() => pending.new.request().postDataJSON().page).toBe(2);
+      await pending.new.fulfill({ json: loadingList("page three") });
+      await expect(page.locator("#registration-rows")).toContainText("page three");
+    });
+  }
+}
+
+test("a failed latest search keeps the last displayed conditions after an older request completes", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: () => ({ json: loadingList("original") }),
+  });
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  let older;
+  await page.route("**/functions/v1/staff", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action !== "list_registrations") return route.fallback();
+    if (body.search === "old") { older = route; return; }
+    if (body.search === "new") return route.fulfill({ status: 503, json: { error: "latest failure" } });
+    await route.fallback();
+  });
+  await page.evaluate(() => { void showRegistrations(1, "old"); });
+  await expect.poll(() => Boolean(older)).toBe(true);
+  await page.evaluate(() => showRegistrations(2, "new"));
+  await expect(page.locator("#message")).toHaveText("latest failure");
+  const response = page.waitForResponse((reply) => reply.request().postDataJSON()?.search === "old");
+  await older.fulfill({ json: loadingList("obsolete", 99) });
+  await response;
+  await settle(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await expect(page.locator("#page-number")).toContainText("1");
+  await expect(page.locator("#previous-page")).toBeDisabled();
+  const next = page.waitForRequest((request) => request.postDataJSON()?.action === "list_registrations");
+  await page.locator("#next-page").click();
+  expect((await next).postDataJSON()).toMatchObject({ page: 1, search: "" });
+});
+
+for (const status of [200, 401, 503]) {
+  test(`a list response from the previous login cannot affect a new login: ${status}`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "original");
+    await login(page);
+    await expect(page.locator("#registration-rows")).toContainText("original");
+    let older;
+    await page.route("**/functions/v1/staff", async (route) => {
+      const body = route.request().postDataJSON();
+      if (body.action === "list_registrations" && body.search === "old") { older = route; return; }
+      await route.fallback();
+    });
+    await page.evaluate(() => { void showRegistrations(0, "old"); });
+    await expect.poll(() => Boolean(older)).toBe(true);
+    await page.locator("#logout-button").click();
+    await expect(page.locator("#login-panel")).toBeVisible();
+    await page.locator('#login-form [name="username"]').fill("tester");
+    await page.locator('#login-form [name="password"]').fill("test-password");
+    await page.locator('#login-form button[type="submit"]').click();
+    await expect(page.locator("#registration-rows")).toContainText("original");
+    const response = page.waitForResponse((reply) => reply.request().postDataJSON()?.search === "old");
+    await older.fulfill({ status, json: status === 200 ? loadingList("obsolete", 99) : { error: "obsolete login failure" } });
+    await response;
+    await settle(page);
+    await expect(page.locator("#staff-panel")).toBeVisible();
+    await expect(page.locator("#registration-rows")).toContainText("original");
+    await expect(page.locator("#registration-count")).not.toContainText("99");
+    await expect(page.locator("#message")).not.toHaveText("obsolete login failure");
+    await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+  });
+}
+
+for (const status of [200, 503]) {
+  test(`detail loading preserves focus and prevents duplicate activation until ${status}`, async ({ page }) => {
+    const data = loadingList("original");
+    await mockStaff(page, "staff", () => {}, "original", { list_registrations: () => ({ json: data }) });
+    await login(page);
+    const button = page.locator("#registration-rows button").first();
+    await expect(button).toBeVisible();
+    let pending;
+    let requests = 0;
+    await page.route("**/functions/v1/staff", async (route) => {
+      if (route.request().postDataJSON().action === "get_registration") { requests++; pending = route; return; }
+      await route.fallback();
+    });
+    const text = await button.textContent();
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => Boolean(pending)).toBe(true);
+    await expect(button).toBeDisabled();
+    await expect(button).toHaveAttribute("aria-disabled", "true");
+    await expect(button).toHaveJSProperty("disabled", false);
+    await expect(button).toBeFocused();
+    await expect(button).toHaveAttribute("aria-busy", "true");
+    await page.keyboard.press("Enter");
+    await button.dispatchEvent("click");
+    await settle(page);
+    expect(requests).toBe(1);
+    await pending.fulfill({ status, json: status === 200 ? { registration: data.registrations[0] } : { error: "detail failure" } });
+    await expect(button).toBeEnabled();
+    await expect(button).not.toHaveAttribute("aria-disabled");
+    await expect(button).toBeFocused();
+    await expect(button).toHaveText(text);
+    await expect(button).not.toHaveAttribute("aria-busy");
+    if (status === 200) await expect(page.locator("#registration-detail")).toBeVisible();
+    else await expect(page.locator("#message")).toHaveText("detail failure");
+  });
+}
+
+test("a superseded initial list cannot restore the previous login's admin sections", async ({ page }) => {
+  let role = "admin";
+  await mockStaff(page, "admin", () => {}, "original", {
+    me: () => ({ json: { profile: {
+      auth_user_id: "123e4567-e89b-42d3-a456-426614174000", display_name: "test", role, must_change_password: false,
+    } } }),
+  });
+  let older;
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "list_registrations" && !older) { older = route; return; }
+    await route.fallback();
+  });
+  await login(page);
+  await expect.poll(() => Boolean(older)).toBe(true);
+  await page.locator("#logout-button").click();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  role = "staff";
+  await page.locator('#login-form [name="username"]').fill("tester");
+  await page.locator('#login-form [name="password"]').fill("test-password");
+  await page.locator('#login-form button[type="submit"]').click();
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  const adminLink = page.locator('.staff-nav [href="#admin-accounts"]');
+  await expect(adminLink).toBeHidden();
+  const response = page.waitForResponse((reply) => reply.request() === older.request());
+  await older.fulfill({ json: loadingList("obsolete") });
+  await response;
+  await settle(page);
+  await expect(adminLink).toBeHidden();
+  await expect(page.locator("#registration-rows")).toContainText("original");
+});
+
+for (const action of ["save_registration", "set_import_status", "void_registration"]) {
+  test(`a pending search survives ${action} and its refresh recounts the filtered list`, async ({ page }) => {
+    const data = loadingList("original", 41);
+    const person = data.registrations[0];
+    person.registration_choices = [{ activity_id: 1, attending: false }];
+    await mockStaff(page, "staff", () => {}, "original", {
+      list_registrations: () => ({ json: data }),
+      get_registration: () => ({ json: { registration: person } }),
+      save_registration: () => ({ json: { success: true, registration: person } }),
+      set_import_status: () => ({ json: { success: true } }),
+      void_registration: () => ({ json: { success: true } }),
+    });
+    await login(page);
+    await page.locator("#registration-rows button").first().click();
+    await expect(page.locator("#registration-detail")).toBeVisible();
+    if (action === "save_registration") await page.locator("#start-registration-edit").click();
+    const pending = [];
+    await holdListRequests(page, (route) => { pending.push(route); });
+    await page.locator('#search-form [name="search"]').fill("needle");
+    await page.locator('#search-form button[type="submit"]').click();
+    await expect.poll(() => pending.length).toBe(1);
+    if (action === "save_registration") {
+      await page.locator('#edit-registration-form button[type="submit"]').click();
+    } else if (action === "set_import_status") {
+      await page.locator('#import-form [name="status"]').selectOption("imported");
+      await page.locator('#import-form button[type="submit"]').click();
+    } else {
+      await page.locator('#void-form [name="reason"]').fill("test");
+      await page.locator('#void-form button[type="submit"]').click();
+      await answerConfirm(page);
+    }
+    await expect.poll(() => pending.length).toBe(2);
+    expect(pending[1].request().postDataJSON()).toMatchObject({ page: 0, search: "needle", summary: true });
+    expect(pending[1].request().postDataJSON().skip_count).toBeUndefined();
+    const filtered = loadingList("filtered", 3);
+    if (action === "void_registration") filtered.registrations[0].id = "323e4567-e89b-42d3-a456-426614174000";
+    await pending[1].fulfill({ json: filtered });
+    await expect(page.locator("#registration-rows")).toContainText("filtered");
+    const response = page.waitForResponse((reply) => reply.request() === pending[0].request());
+    await pending[0].fulfill({ json: loadingList("obsolete", 99) });
+    await response;
+    await settle(page);
+    await expect(page.locator('#search-form [name="search"]')).toHaveValue("needle");
+    await expect(page.locator("#registration-rows")).toContainText("filtered");
+    await expect(page.locator("#registration-count")).toContainText("3");
+    await expect(page.locator("#registration-count")).not.toContainText("99");
+    await expect(page.locator("#next-page")).toBeDisabled();
+  });
+}
+
+test("a failed inherited refresh drops pending conditions and the next refresh uses the displayed filters", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original", { list_registrations: () => ({ json: loadingList("original", 41) }) });
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  const pending = [];
+  await holdListRequests(page, (route) => { pending.push(route); });
+  await page.evaluate(() => { void showRegistrations(1, "needle"); });
+  await expect.poll(() => pending.length).toBe(1);
+  const refreshing = page.evaluate(() => loadRegistrations(false).catch(() => false));
+  await expect.poll(() => pending.length).toBe(2);
+  expect(pending[1].request().postDataJSON()).toMatchObject({ page: 1, search: "needle" });
+  expect(pending[1].request().postDataJSON().skip_count).toBeUndefined();
+  await pending[1].fulfill({ status: 503, json: { error: "refresh failure" } });
+  expect(await refreshing).toBe(false);
+  const retrying = page.evaluate(() => loadRegistrations(false));
+  await expect.poll(() => pending.length).toBe(3);
+  expect(pending[2].request().postDataJSON()).toMatchObject({ page: 0, search: "", skip_count: true });
+  await pending[2].fulfill({ json: loadingList("original", 41) });
+  expect(await retrying).toBe(true);
+  const response = page.waitForResponse((reply) => reply.request() === pending[0].request());
+  await pending[0].fulfill({ json: loadingList("obsolete", 99) });
+  await response;
+  await settle(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await expect(page.locator("#registration-count")).toContainText("41");
+  await expect(page.locator("#page-number")).toContainText("1");
+});
+
+test("an initial list superseded within the same login still enables admin sections", async ({ page }) => {
+  await mockStaff(page, "admin", () => {}, "original");
+  let initial;
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "list_registrations" && !initial) { initial = route; return; }
+    await route.fallback();
+  });
+  await login(page);
+  await expect.poll(() => Boolean(initial)).toBe(true);
+  await page.evaluate(() => loadRegistrations());
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  const response = page.waitForResponse((reply) => reply.request() === initial.request());
+  await initial.fulfill({ json: loadingList("obsolete") });
+  await response;
+  await expect(page.locator('.staff-nav [href="#admin-accounts"]')).toBeVisible();
+  await expect(page.locator("#registration-rows")).toContainText("original");
+});
+
+test("a stale clear-search failure cannot restore fields over a newer search", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original");
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await page.locator('#search-form [name="search"]').fill("before clear");
+  let clearing;
+  await page.route("**/functions/v1/staff", async (route) => {
+    const body = route.request().postDataJSON();
+    if (body.action === "list_registrations" && body.search === "") { clearing = route; return; }
+    if (body.action === "list_registrations" && body.search === "new") return route.fulfill({ json: loadingList("latest", 3) });
+    await route.fallback();
+  });
+  await page.locator("#clear-search").click();
+  await expect.poll(() => Boolean(clearing)).toBe(true);
+  await page.locator('#search-form [name="search"]').fill("new");
+  await page.evaluate(() => showRegistrations(0, "new"));
+  const response = page.waitForResponse((reply) => reply.request() === clearing.request());
+  await clearing.fulfill({ status: 503, json: { error: "stale clear failure" } });
+  await response;
+  await settle(page);
+  await expect(page.locator('#search-form [name="search"]')).toHaveValue("new");
+  await expect(page.locator("#registration-rows")).toContainText("latest");
+  await expect(page.locator("#message")).not.toHaveText("stale clear failure");
+});
+
+for (const action of ["next", "previous", "search"]) {
+  test(`${action} retains keyboard focus and ignores repeated activation`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "original", {
+      list_registrations: () => ({ json: loadingList("original", 41) }),
+    });
+    await login(page);
+    await expect(page.locator("#registration-rows")).toContainText("original");
+    if (action === "previous") await page.evaluate(() => showRegistrations(2));
+    const pending = [];
+    await holdListRequests(page, (route) => pending.push(route));
+    const button = page.locator(action === "search" ? '#search-form button[type="submit"]' : `#${action}-page`);
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => pending.length).toBe(1);
+    await expect(button).toHaveAttribute("aria-disabled", "true");
+    await expect(button).toHaveJSProperty("disabled", false);
+    await expect(button).toBeFocused();
+    await markListRequest(page);
+    await page.keyboard.press("Enter");
+    await button.dispatchEvent("click");
+    expect(await listRequestKept(page)).toBe(true);
+    expect(pending).toHaveLength(1);
+    await pending[0].fulfill({ json: loadingList("updated", 41) });
+    await expect(page.locator("#registration-rows")).toContainText("updated");
+    await expect(button).not.toHaveAttribute("aria-disabled");
+    await expect(button).toBeFocused();
+  });
+}
+
+test("a timed out list restores controls and can be retried", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: () => ({ json: loadingList("original") }),
+  });
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  const pending = [];
+  await holdListRequests(page, (route) => pending.push(route));
+  const search = page.locator('#search-form button[type="submit"]');
+  await search.click();
+  await expect.poll(() => pending.length).toBe(1);
+  await page.clock.fastForward(30_000);
+  await expect(page.locator("#message")).toHaveText("名單載入逾時，請稍後重新查詢名單");
+  await expect(search).not.toHaveAttribute("aria-disabled");
+  await expect(page.locator("#next-page")).toBeEnabled();
+  await search.click();
+  await expect.poll(() => pending.length).toBe(2);
+  await pending[1].fulfill({ json: loadingList("retry") });
+  await expect(page.locator("#registration-rows")).toContainText("retry");
+});
+
+test("a 401 from before a token refresh still expires the same login", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original");
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  const pending = [];
+  await holdListRequests(page, (route) => pending.push(route));
+  await page.locator('#search-form button[type="submit"]').click();
+  await expect.poll(() => pending.length).toBe(1);
+  await page.route("**/auth/v1/token?grant_type=refresh_token", (route) => route.fulfill({
+    json: { access_token: "test-access", refresh_token: "refreshed", expires_in: 3600 },
+  }));
+  await page.evaluate(async () => { session.expires_at = Date.now(); await api("me"); });
+  await pending[0].fulfill({ status: 401, json: { error: "expired" } });
+  await expect(page.locator("#login-panel")).toBeVisible();
+  expect(await page.evaluate(() => sessionStorage.getItem(sessionKey))).toBeNull();
+});
+
+for (const status of [200, 400]) {
+  test(`a stale token refresh ${status} cannot affect a later login`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "original");
+    await login(page);
+    await expect(page.locator("#registration-rows")).toContainText("original");
+    let refresh;
+    await page.route("**/auth/v1/token?grant_type=refresh_token", (route) => { refresh = route; });
+    await page.evaluate(() => { session.expires_at = Date.now(); });
+    const refreshing = page.evaluate(() => accessToken().catch((error) => error.stale));
+    await expect.poll(() => Boolean(refresh)).toBe(true);
+    await page.locator("#logout-button").click();
+    await expect(page.locator("#login-panel")).toBeVisible();
+    if (status === 400) {
+      await page.locator('#login-form [name="username"]').fill("tester");
+      await page.locator('#login-form [name="password"]').fill("test-password");
+      await page.locator('#login-form button[type="submit"]').click();
+      await expect(page.locator("#registration-rows")).toContainText("original");
+    }
+    const stored = await page.evaluate(() => sessionStorage.getItem(sessionKey));
+    await refresh.fulfill({ status, json: { access_token: "obsolete", refresh_token: "obsolete", expires_in: 3600 } });
+    expect(await refreshing).toBe(true);
+    expect(await page.evaluate(() => sessionStorage.getItem(sessionKey))).toBe(stored);
+    await expect(page.locator(status === 200 ? "#login-panel" : "#staff-panel")).toBeVisible();
+  });
+}
+
+test("a failed second login clears the first login's stored session", async ({ page }) => {
+  await mockStaff(page, "admin");
+  let older;
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "me") { older = route; return; }
+    await route.fallback();
+  });
+  await login(page);
+  await expect.poll(() => Boolean(older)).toBe(true);
+  expect(await page.evaluate(() => sessionStorage.getItem(sessionKey))).not.toBeNull();
+  await page.route("**/auth/v1/token?grant_type=password", (route) => {
+    expect(route.request().postDataJSON().email).toBe("second@accounts.invalid");
+    return route.fulfill({ status: 400, json: { error: "invalid credentials" } });
+  });
+  await page.locator('#login-form [name="username"]').fill("second");
+  await page.locator('#login-form [name="password"]').fill("wrong-password");
+  await page.locator('#login-form button[type="submit"]').click();
+  await expect(page.locator("#message")).toHaveText("登入失敗，請確認帳號與密碼");
+  expect(await page.evaluate(() => sessionStorage.getItem(sessionKey))).toBeNull();
+  const response = page.waitForResponse((reply) => reply.request() === older.request());
+  await older.fulfill({ json: { profile: { display_name: "obsolete admin", role: "admin", must_change_password: false } } });
+  await response;
+  await settle(page);
+  await expect(page.locator("#staff-panel")).toBeHidden();
+  await page.reload();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  await expect(page.locator("#staff-panel")).toBeHidden();
+  expect(await page.evaluate(() => sessionStorage.getItem(sessionKey))).toBeNull();
+});
+
+test("login expiry takes priority over a list timeout during token refresh", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original");
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  let refresh;
+  await page.route("**/auth/v1/token?grant_type=refresh_token", (route) => { refresh = route; });
+  await page.evaluate(() => { session.expires_at = Date.now(); });
+  await page.locator('#search-form button[type="submit"]').click();
+  await expect.poll(() => Boolean(refresh)).toBe(true);
+  await page.clock.fastForward(30_000);
+  await refresh.fulfill({ status: 400, json: {} });
+  await expect(page.locator("#message")).toHaveText("登入已過期，請重新登入");
+  await expect(page.locator("#login-panel")).toBeVisible();
+});
+
+for (const [action, success] of [
+  ["void_registration", "登記已作廢"],
+  ["set_import_status", "匯入狀態已更新"],
+  ["create_registration", "協助登記已建立"],
+]) {
+  test(`${action} reports the successful write when its list refresh fails`, async ({ page }) => {
+    let failRefresh = false;
+    let writes = 0;
+    await mockStaff(page, "staff", () => {}, "original", {
+      list_registrations: () => failRefresh ? { status: 503, json: { error: "refresh failure" } } : { json: loadingList("original", 1) },
+      [action]: () => { writes++; failRefresh = true; return { json: { success: true, serial_no: 2 } }; },
+    });
+    await login(page, action === "create_registration" ? "協助登記" : undefined);
+    if (action === "create_registration") {
+      const form = page.locator("#new-registration-form");
+      await form.locator('[name="full_name"]').fill("created person");
+      await form.locator('[name="meal_identity"]').selectOption("general");
+      await form.locator('[name="district_id"]').selectOption("1");
+      await form.locator('input[name="activity_1"][value="true"]').check();
+      await form.locator('button[type="submit"]').click();
+      await expect(page.locator("#new-registration-code")).toContainText("已建立流水號 2");
+      await expect(form.locator('[name="full_name"]')).toHaveValue("");
+    } else {
+      await page.locator("#registration-rows button").first().click();
+      if (action === "void_registration") {
+        await page.locator('#void-form [name="reason"]').fill("test");
+        await page.locator('#void-form button[type="submit"]').click();
+        await answerConfirm(page);
+      } else {
+        await page.locator('#import-form [name="status"]').selectOption("imported");
+        await page.locator('#import-form button[type="submit"]').click();
+      }
+    }
+    await expect(page.locator("#message")).toHaveText(`${success}，但畫面未能重新整理：refresh failure`);
+    expect(writes).toBe(1);
+    await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+  });
+}
+
+test("an older me response cannot replace the second login", async ({ page }) => {
+  let meCalls = 0;
+  await mockStaff(page, "staff", () => {}, "original", {
+    me: () => ({ json: { profile: { auth_user_id: "second", display_name: "second login", role: "staff", must_change_password: false } } }),
+  });
+  let older;
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "me" && ++meCalls === 1) { older = route; return; }
+    await route.fallback();
+  });
+  await login(page);
+  await expect.poll(() => Boolean(older)).toBe(true);
+  await page.locator('#login-form [name="password"]').fill("second-password");
+  await page.locator('#login-form button[type="submit"]').click();
+  await expect(page.locator("#identity")).toContainText("second login");
+  const response = page.waitForResponse((reply) => reply.request() === older.request());
+  await older.fulfill({ json: { profile: { auth_user_id: "first", display_name: "obsolete admin", role: "admin", must_change_password: false } } });
+  await response;
+  await settle(page);
+  await expect(page.locator("#identity")).toContainText("second login");
+  await expect(page.locator('.staff-nav [href="#admin-accounts"]')).toBeHidden();
+});
+
+test("staff rows from a logged out admin remain empty", async ({ page }) => {
+  await mockStaff(page, "admin");
+  let pending;
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "list_staff") { pending = route; return; }
+    await route.fallback();
+  });
+  await login(page);
+  await expect.poll(() => Boolean(pending)).toBe(true);
+  await page.locator("#logout-button").click();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  const response = page.waitForResponse((reply) => reply.request() === pending.request());
+  await pending.fulfill({ json: { staff: [{ username: "obsolete", display_name: "old admin", role: "admin", is_active: true }] } });
+  await response;
+  await settle(page);
+  await expect(page.locator("#staff-rows tr")).toHaveCount(0);
+});
+
+test("a failed first list after relogin has no previous count or page", async ({ page }) => {
+  let fail = false;
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: () => fail ? { status: 503, json: { error: "list unavailable" } } : { json: loadingList("original") },
+  });
+  await login(page);
+  await expect(page.locator("#registration-count")).toContainText("21");
+  await page.locator("#logout-button").click();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  fail = true;
+  await page.locator('#login-form [name="username"]').fill("tester");
+  await page.locator('#login-form [name="password"]').fill("test-password");
+  await page.locator('#login-form button[type="submit"]').click();
+  await expect(page.locator("#message")).toHaveText("list unavailable");
+  await expect(page.locator("#registration-count")).toBeEmpty();
+  await expect(page.locator("#page-number")).toBeEmpty();
+});
+
+for (const order of ["original-first", "takeover-first"]) {
+  test(`an inherited refresh completes the original void action's detail update: ${order}`, async ({ page }) => {
+    let person = loadingList("original").registrations[0];
+    await mockStaff(page, "staff", () => {}, "original", {
+      list_registrations: () => ({ json: { count: 1, registrations: [person] } }),
+      get_registration: () => ({ json: { registration: person } }),
+      void_registration: () => { person = { ...person, record_status: "void" }; return { json: { success: true } }; },
+    });
+    await login(page);
+    await page.locator("#registration-rows button").first().click();
+    await expect(page.locator('#void-form [name="reason"]')).toBeEnabled();
+    const pending = [];
+    await holdListRequests(page, (route) => pending.push(route));
+    await page.locator('#void-form [name="reason"]').fill("test");
+    await page.locator('#void-form button[type="submit"]').click();
+    await answerConfirm(page);
+    await expect.poll(() => pending.length).toBe(1);
+    const refreshing = page.evaluate(() => loadRegistrations());
+    await expect.poll(() => pending.length).toBe(2);
+    // loadRegistrationDetail counts up detailRequest as it starts, before any request reaches a route handler.
+    const loadsBeforeTakeover = await page.evaluate(() => detailRequest);
+    if (order === "original-first") {
+      await finishListRequest(page, pending[0], { json: loadingList("obsolete", 1) });
+      await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "true");
+      // The original waits for the takeover instead of reloading the record from the obsolete list.
+      expect(await page.evaluate(() => detailRequest)).toBe(loadsBeforeTakeover);
+      await expect(page.locator('#void-form [name="reason"]')).toBeEnabled();
+    }
+    await pending[1].fulfill({ json: { count: 1, registrations: [person] } });
+    expect(await refreshing).toBe(true);
+    if (order === "takeover-first") await finishListRequest(page, pending[0], { json: loadingList("obsolete", 1) });
+    await expect(page.locator('#void-form [name="reason"]')).toBeDisabled();
+    await expect(page.locator("#start-registration-edit")).toBeHidden();
+  });
+
+  test(`an inherited child search still fills the field and opens its detail: ${order}`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "original", familyReplies);
+    await login(page);
+    await page.locator("#registration-rows button").first().click();
+    const pending = [];
+    await holdListRequests(page, (route) => pending.push(route));
+    await page.locator("#detail-children").getByRole("button", { name: "#4 王小明" }).click();
+    await expect.poll(() => pending.length).toBe(1);
+    const refreshing = page.evaluate(() => loadRegistrations());
+    await expect.poll(() => pending.length).toBe(2);
+    const child = family.find((person) => person.serial_no === 4);
+    if (order === "original-first") {
+      await finishListRequest(page, pending[0], { json: { count: 1, registrations: [child] } });
+      await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "true");
+      await expect(page.locator('#search-form [name="search"]')).toHaveValue("");
+    }
+    await pending[1].fulfill({ json: { count: 1, registrations: [child] } });
+    expect(await refreshing).toBe(true);
+    if (order === "takeover-first") await finishListRequest(page, pending[0], { json: { count: 1, registrations: [child] } });
+    await expect(page.locator('#search-form [name="search"]')).toHaveValue("4");
+    await expect(page.locator("#detail-title")).toContainText("王小明");
+  });
+
+  test(`a failed inherited clear restores the fields: ${order}`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "original");
+    await login(page);
+    const search = page.locator('#search-form [name="search"]');
+    await search.fill("original filter");
+    await page.locator('#search-form button[type="submit"]').click();
+    await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+    const pending = [];
+    await holdListRequests(page, (route) => pending.push(route));
+    await page.locator("#clear-search").click();
+    await expect.poll(() => pending.length).toBe(1);
+    const refreshing = page.evaluate(() => loadRegistrations().catch((error) => error.message));
+    await expect.poll(() => pending.length).toBe(2);
+    if (order === "original-first") {
+      await finishListRequest(page, pending[0], { json: loadingList("obsolete", 1) });
+      await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "true");
+      await expect(search).toHaveValue("");
+    }
+    await pending[1].fulfill({ status: 503, json: { error: "inherited failure" } });
+    expect(await refreshing).toBe("inherited failure");
+    if (order === "takeover-first") await finishListRequest(page, pending[0], { json: loadingList("obsolete", 1) });
+    await expect(search).toHaveValue("original filter");
+  });
+}
+
+test("an empty page with a null count recounts and terminates at page zero", async ({ page }) => {
+  let empty = false;
+  const requests = [];
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: (body) => {
+      requests.push(body);
+      return { json: empty ? { count: body.skip_count ? null : 0, registrations: [] } : loadingList("original") };
+    },
+  });
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await page.evaluate(() => showRegistrations(2));
+  empty = true;
+  const start = requests.length;
+  expect(await page.evaluate(() => loadRegistrations(false))).toBe(true);
+  expect(requests.slice(start).map(({ page, skip_count }) => ({ page, skip_count }))).toEqual([
+    { page: 2, skip_count: true }, { page: 2, skip_count: undefined }, { page: 0, skip_count: undefined },
+  ]);
+  await expect(page.locator("#registration-count")).toHaveText("共 0 筆");
+  await expect(page.locator("#page-number")).toHaveText("第 1 頁");
+});
+
+test("processing the only record on the last filtered page returns to a populated page", async ({ page }) => {
+  let imported = false;
+  const people = Array.from({ length: 11 }, (_, index) => ({
+    ...loadingList(`person ${index + 1}`).registrations[0],
+    id: `223e4567-e89b-42d3-a456-${String(index).padStart(12, "0")}`, serial_no: index + 1,
+  }));
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: ({ page = 0 }) => {
+      const remaining = imported ? people.slice(0, 10) : people;
+      return { json: { count: remaining.length, registrations: remaining.slice(page * 10, (page + 1) * 10) } };
+    },
+    get_registration: ({ registration_id }) => ({ json: { registration: people.find((person) => person.id === registration_id) } }),
+    set_import_status: () => { imported = true; return { json: { success: true } }; },
+  });
+  await login(page);
+  await page.locator('#search-form [name="import_status"]').selectOption("pending");
+  await page.locator('#search-form button[type="submit"]').click();
+  await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+  await page.locator("#next-page").click();
+  await expect(page.locator("#registration-count")).toHaveText("共 11 筆，目前第 11 筆");
+  await page.locator("#registration-rows button").first().click();
+  await page.locator('#import-form [name="status"]').selectOption("imported");
+  await page.locator('#import-form button[type="submit"]').click();
+  await expect(page.locator("#registration-rows tr")).toHaveCount(10);
+  await expect(page.locator("#page-number")).toHaveText("第 1 頁");
+  await expect(page.locator("#registration-count")).toHaveText("共 10 筆，目前第 1 至 10 筆");
+});
+
+test("a stalled token refresh times out the list and a retry shares that refresh", async ({ page }) => {
+  await mockStaff(page, "staff", () => {}, "original");
+  await login(page);
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  const refreshes = [];
+  await page.route("**/auth/v1/token?grant_type=refresh_token", (route) => { refreshes.push(route); });
+  await page.evaluate(() => { session.expires_at = Date.now(); });
+  const search = page.locator('#search-form button[type="submit"]');
+  await search.click();
+  await expect.poll(() => refreshes.length).toBe(1);
+  await page.clock.fastForward(30_000);
+  await expect(page.locator("#message")).toHaveText("名單載入逾時，請稍後重新查詢名單");
+  await expect(search).not.toHaveAttribute("aria-disabled");
+  // A second refresh would send the token the first may already have rotated; the retry waits for the first.
+  const listed = page.waitForResponse((reply) => reply.url().includes("/functions/v1/staff")
+    && reply.request().postDataJSON().action === "list_registrations");
+  await search.click();
+  await refreshes[0].fulfill({ json: { access_token: "test-access", refresh_token: "rotated", expires_in: 3600 } });
+  expect((await listed).status()).toBe(200);
+  expect(refreshes).toHaveLength(1);
+  expect(await page.evaluate(() => session.refresh_token)).toBe("rotated");
+  await expect(page.locator("#staff-panel")).toBeVisible();
+});
+
+for (const conditions of ["applied", "typed"]) {
+  test(`clearing ${conditions} conditions keeps keyboard focus through a failed load`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "original");
+    await login(page);
+    await expect(page.locator("#registration-rows")).toContainText("original");
+    const search = page.locator('#search-form [name="search"]');
+    await search.fill("needle");
+    if (conditions === "applied") {
+      const searched = page.waitForResponse((reply) => reply.url().includes("/functions/v1/staff")
+        && reply.request().postDataJSON().search === "needle");
+      await page.locator('#search-form button[type="submit"]').click();
+      await searched;
+      await settle(page);
+    }
+    const pending = [];
+    await holdListRequests(page, (route) => pending.push(route));
+    const clear = page.locator("#clear-search");
+    await clear.focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => pending.length).toBe(1);
+    await expect(clear).toHaveAttribute("aria-disabled", "true");
+    await expect(clear).toBeFocused();
+    await markListRequest(page);
+    await page.keyboard.press("Enter");
+    expect(await listRequestKept(page)).toBe(true);
+    await finishListRequest(page, pending[0], { status: 503, json: { error: "list unavailable" } });
+    await expect(search).toHaveValue("needle");
+    await expect(clear).not.toHaveAttribute("aria-disabled");
+    await expect(clear).toBeFocused();
+  });
+}
+
+for (const [action, expected] of [["next", "#previous-page"], ["previous", "#next-page"], ["clear", '#search-form [name="search"]']]) {
+  test(`${action} that ends up disabled hands keyboard focus to ${expected}`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "original", {
+      list_registrations: ({ page: number = 0 }) => ({ json: loadingList(`page ${number}`, 11) }),
+    });
+    await login(page);
+    await expect(page.locator("#registration-rows")).toContainText("page 0");
+    if (action === "previous") await page.evaluate(() => showRegistrations(1));
+    if (action === "clear") {
+      await page.locator('#search-form [name="search"]').fill("needle");
+      await page.locator('#search-form button[type="submit"]').click();
+    }
+    await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+    const button = page.locator(action === "clear" ? "#clear-search" : `#${action}-page`);
+    await expect(button).toBeEnabled();
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await expect(button).toBeDisabled();
+    await expect(page.locator(expected)).toBeFocused();
+  });
+}
+
+test("a void refresh replaced by new conditions still updates the record", async ({ page }) => {
+  let person = loadingList("original").registrations[0];
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: () => ({ json: { count: 1, registrations: [person] } }),
+    get_registration: () => ({ json: { registration: person } }),
+    void_registration: () => { person = { ...person, record_status: "void" }; return { json: { success: true } }; },
+  });
+  await login(page);
+  await page.locator("#registration-rows button").first().click();
+  await expect(page.locator('#void-form [name="reason"]')).toBeEnabled();
+  const pending = [];
+  await holdListRequests(page, (route) => pending.push(route));
+  await page.locator('#void-form [name="reason"]').fill("test");
+  await page.locator('#void-form button[type="submit"]').click();
+  await answerConfirm(page);
+  await expect.poll(() => pending.length).toBe(1);
+  await page.evaluate(() => { showRegistrations(0, "other", "", [], ""); });
+  await expect.poll(() => pending.length).toBe(2);
+  await finishListRequest(page, pending[0], { json: { count: 1, registrations: [person] } });
+  await expect(page.locator('#void-form [name="reason"]')).toBeDisabled();
+  await expect(page.locator("#message")).toHaveText("登記已作廢。");
+  await finishListRequest(page, pending[1], { json: { count: 0, registrations: [] } });
+});
+
+test("a replaced login's network failure shows no error", async ({ page }) => {
+  await mockStaff(page, "staff");
+  let first;
+  await page.route("**/auth/v1/token?grant_type=password", async (route) => {
+    if (!first) { first = route; return; }
+    await route.fallback();
+  });
+  await login(page);
+  await expect.poll(() => Boolean(first)).toBe(true);
+  await page.getByRole("button", { name: "登入" }).click();
+  await expect(page.locator("#staff-panel")).toBeVisible();
+  await first.abort("failed");
+  await settle(page);
+  await expect(page.locator("#toast")).toBeHidden();
+  await expect(page.locator("#staff-panel")).toBeVisible();
+});
+
+for (const [kind, button, action] of [
+  ["statistics", "更新統計", "registration_statistics"],
+  ["statistics CSV", "下載統計 CSV", "registration_statistics"],
+  ["registration CSV", "下載報名登記 CSV", "list_registrations"],
+]) {
+  test(`${kind} requested before logout delivers nothing afterwards`, async ({ page }) => {
+    await mockStaff(page, "staff", () => {}, "測試登記", familyReplies);
+    let hold = false;
+    let held;
+    await page.route("**/functions/v1/staff", async (route) => {
+      const body = route.request().postDataJSON();
+      if (hold && body.action === action && (action !== "list_registrations" || body.before_serial)) { held = route; return; }
+      await route.fallback();
+    });
+    await login(page, "統計與匯出");
+    await page.evaluate(() => { window.savedCsv = 0; saveCsv = () => { window.savedCsv++; }; });
+    // Without a logout the same button does deliver, which shows the replaced saveCsv is the one called.
+    await page.getByRole("button", { name: button }).click();
+    if (kind === "statistics") await expect(page.locator("#stats-rows tr")).not.toHaveCount(0);
+    else await expect.poll(() => page.evaluate(() => window.savedCsv)).toBe(1);
+    const delivered = await page.evaluate(() => window.savedCsv);
+    hold = true;
+    await page.getByRole("button", { name: button }).click();
+    await expect.poll(() => Boolean(held)).toBe(true);
+    await page.locator("#logout-button").click();
+    await expect(page.locator("#login-panel")).toBeVisible();
+    const response = page.waitForResponse((reply) => reply.request() === held.request());
+    await held.fallback();
+    await response;
+    await settle(page);
+    expect(await page.evaluate(() => window.savedCsv)).toBe(delivered);
+    for (const rows of ["#stats-rows", "#district-stats-rows", "#hosting-pickup-stats-rows"]) {
+      await expect(page.locator(`${rows} tr`)).toHaveCount(0);
+    }
+  });
+}
+
+test("a registration created before logout leaves the next login's 協助登記 form alone", async ({ page }) => {
+  let held;
+  await mockStaff(page, "staff", () => {}, "original");
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "create_registration") { held = route; return; }
+    await route.fallback();
+  });
+  await login(page, "協助登記");
+  const form = page.locator("#new-registration-form");
+  await form.locator('[name="full_name"]').fill("created person");
+  await form.locator('[name="meal_identity"]').selectOption("general");
+  await form.locator('[name="district_id"]').selectOption("1");
+  await form.locator('input[name="activity_1"][value="true"]').check();
+  await form.locator('button[type="submit"]').click();
+  await expect.poll(() => Boolean(held)).toBe(true);
+  await page.locator("#logout-button").click();
+  await page.locator('#login-form [name="username"]').fill("tester");
+  await page.locator('#login-form [name="password"]').fill("test-password");
+  await page.locator('#login-form button[type="submit"]').click();
+  await expect(page.locator("#registration-rows")).toContainText("original");
+  await go(page, "協助登記");
+  await form.locator('[name="full_name"]').fill("next person");
+  const response = page.waitForResponse((reply) => reply.request() === held.request());
+  await held.fulfill({ status: 201, json: { serial_no: 2 } });
+  await response;
+  await settle(page);
+  await expect(form.locator('[name="full_name"]')).toHaveValue("next person");
+  await expect(page.locator("#new-registration-code")).toBeHidden();
+  await expect(page.locator("#message")).not.toHaveText("協助登記已建立。");
+});
+
+test("a late void refresh leaves a record opened and being edited since then alone", async ({ page }) => {
+  const first = { ...loadingList("first person").registrations[0] };
+  const second = { ...first, id: "223e4567-e89b-42d3-a456-426614174999", serial_no: 2, full_name: "second person" };
+  const people = () => [first, second];
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: () => ({ json: { count: 2, registrations: people() } }),
+    get_registration: ({ registration_id }) => ({ json: { registration: people().find((person) => person.id === registration_id) } }),
+    void_registration: () => { first.record_status = "void"; return { json: { success: true } }; },
+  });
+  await login(page);
+  await page.locator("#registration-rows tr").filter({ hasText: "first person" }).getByRole("button").click();
+  await expect(page.locator("#detail-title")).toContainText("first person");
+  const pending = [];
+  await holdListRequests(page, (route) => pending.push(route));
+  await page.locator('#void-form [name="reason"]').fill("test");
+  await page.locator('#void-form button[type="submit"]').click();
+  await answerConfirm(page);
+  await expect.poll(() => pending.length).toBe(1);
+  await page.evaluate(() => { showRegistrations(0, "other", "", [], ""); });
+  await expect.poll(() => pending.length).toBe(2);
+  await finishListRequest(page, pending[1], { json: { count: 2, registrations: people() } });
+  await page.locator("#registration-rows tr").filter({ hasText: "second person" }).getByRole("button").click();
+  await expect(page.locator("#detail-title")).toContainText("second person");
+  await page.locator("#start-registration-edit").click();
+  await page.locator('#edit-registration-form input[name="full_name"]').fill("unsaved change");
+  const opened = await page.evaluate(() => detailRequest);
+  await finishListRequest(page, pending[0], { json: { count: 2, registrations: people() } });
+  expect(await page.evaluate(() => detailRequest)).toBe(opened);
+  await expect(page.locator("#detail-title")).toContainText("second person");
+  await expect(page.locator('#edit-registration-form input[name="full_name"]')).toHaveValue("unsaved change");
+});
+
+test("an older login's failed me shows no error over the second login", async ({ page }) => {
+  let meCalls = 0;
+  await mockStaff(page, "staff", () => {}, "original");
+  let older;
+  await page.route("**/functions/v1/staff", async (route) => {
+    if (route.request().postDataJSON().action === "me" && ++meCalls === 1) { older = route; return; }
+    await route.fallback();
+  });
+  await login(page);
+  await expect.poll(() => Boolean(older)).toBe(true);
+  await page.locator('#login-form [name="password"]').fill("second-password");
+  await page.locator('#login-form button[type="submit"]').click();
+  await expect(page.locator("#staff-panel")).toBeVisible();
+  await expect(page.locator("#registration-table")).toHaveAttribute("aria-busy", "false");
+  const response = page.waitForResponse((reply) => reply.request() === older.request());
+  await older.fulfill({ status: 503, json: { error: "older failure" } });
+  await response;
+  await settle(page);
+  await expect(page.locator("#toast")).toBeHidden();
+});
+
+test("a skipped count never shows fewer records than the rows on screen", async ({ page }) => {
+  const people = Array.from({ length: 21 }, (_, index) => ({
+    ...loadingList(`person ${index + 1}`).registrations[0],
+    id: `223e4567-e89b-42d3-a456-${String(index).padStart(12, "0")}`, serial_no: index + 1,
+  }));
+  const requests = [];
+  await mockStaff(page, "staff", () => {}, "original", {
+    list_registrations: (body) => {
+      requests.push(body);
+      const rows = people.slice((body.page ?? 0) * 10, (body.page ?? 0) * 10 + 10);
+      return { json: { count: body.skip_count ? null : people.length, registrations: rows } };
+    },
+  });
+  await login(page);
+  await expect(page.locator("#registration-count")).toHaveText("共 21 筆，目前第 1 至 10 筆");
+  await page.evaluate(() => showRegistrations(2));
+  await expect(page.locator("#registration-count")).toHaveText("共 21 筆，目前第 21 筆");
+  people.push(...people.slice(0, 4).map((person, index) => ({ ...person, serial_no: 22 + index })));
+  expect(await page.evaluate(() => loadRegistrations(false))).toBe(true);
+  await expect(page.locator("#registration-count")).toHaveText("共 25 筆，目前第 21 至 25 筆");
+  // An empty first page with a skipped count is recounted too, rather than showing the old total.
+  people.length = 0;
+  await page.evaluate(() => showRegistrations(0));
+  const start = requests.length;
+  expect(await page.evaluate(() => loadRegistrations(false))).toBe(true);
+  expect(requests.slice(start).map(({ page, skip_count }) => ({ page, skip_count }))).toEqual([
+    { page: 0, skip_count: true }, { page: 0, skip_count: undefined },
+  ]);
+  await expect(page.locator("#registration-count")).toHaveText("共 0 筆");
+});
+
+test("an activity audience check started before logout asks nothing afterwards", async ({ page }) => {
+  const attending = { ...loadingList("attending").registrations[0], registration_choices: [{ activity_id: 1, attending: true }] };
+  await mockStaff(page, "admin", () => {}, "test", {
+    ...threeActivities,
+    list_registrations: () => ({ json: { count: 1, registrations: [attending] } }),
+  });
+  let hold = false;
+  let held;
+  await page.route("**/functions/v1/staff", async (route) => {
+    const body = route.request().postDataJSON();
+    if (hold && body.action === "list_registrations" && body.before_serial) { held = route; return; }
+    await route.fallback();
+  });
+  await login(page, "活動");
+  const form = page.locator("#activity-form");
+  await page.locator("#activity-rows").getByRole("button", { name: "編輯" }).first().click();
+  await expect(form.locator('select[name="audience"]')).toHaveValue("all");
+  await form.locator('select[name="audience"]').selectOption("hosting");
+  // Without a logout the same save asks about the sign-up outside the new audience.
+  await form.getByRole("button", { name: /^儲存活動/ }).click();
+  expect(await answerConfirm(page, false)).toContain("不符對象");
+  hold = true;
+  await form.getByRole("button", { name: /^儲存活動/ }).click();
+  await expect.poll(() => Boolean(held)).toBe(true);
+  await page.locator("#logout-button").click();
+  await expect(page.locator("#login-panel")).toBeVisible();
+  const response = page.waitForResponse((reply) => reply.request() === held.request());
+  await held.fallback();
+  await response;
+  await settle(page);
+  await expect(confirmDialog(page)).toHaveCount(0);
+  await expect(page.locator("#message")).toHaveText("已登出。");
 });
