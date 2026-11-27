@@ -12,8 +12,10 @@ begin
   select auth_user_id into strict actor from public.staff_profiles
     where is_active and not must_change_password and role = 'admin' limit 1;
   select id into district from public.districts limit 1;
-  insert into public.activities(category,title,is_published,sort_order,affects_conference_import)
-    values ('meeting','Import tracked fixture',true,9998,true) returning id into tracked;
+  insert into public.activities(category,title,starts_at,starts_at_has_time,ends_at,ends_at_has_time,
+    is_published,sort_order,affects_conference_import)
+    values ('meeting','Import tracked fixture','2000-01-01 00:00+08',false,'2000-01-01 00:00+08',false,true,9998,true)
+    returning id into tracked;
   insert into public.activities(category,title,is_published,sort_order)
     values ('meal','Import local fixture',true,9999) returning id into local_activity;
   insert into public.registrations(create_request_id,full_name,district_id,meal_identity,import_status)
@@ -72,6 +74,12 @@ begin
   update public.registrations set import_status='imported' where id=registration;
   perform public.staff_save_reference(actor,'activity',data||'{"cost_amount":100}'::jsonb);
   assert (select import_status='imported' from public.registrations where id=registration), 'COST_DIRTIED_IMPORT';
+  -- Moving a tracked date-only activity to another day with times keeps imported.
+  perform public.staff_save_reference(actor,'activity',data||jsonb_build_object('starts_at','2000-01-02 09:00+08',
+    'starts_at_has_time',true,'ends_at','2000-01-02 11:00+08','ends_at_has_time',true));
+  assert (select starts_at='2000-01-02 09:00+08' and starts_at_has_time and ends_at='2000-01-02 11:00+08' and ends_at_has_time
+    from public.activities where id=tracked), 'TRACKED_TIME_NOT_SAVED';
+  assert (select import_status='imported' from public.registrations where id=registration), 'TRACKED_TIME_DIRTIED_IMPORT';
   -- New activities save the setting, default to unchecked and leave import statuses alone.
   data := public.staff_save_reference(actor,'activity',
     '{"category":"meal","title":"Import new fixture","is_published":false,"sort_order":10000}'::jsonb);
